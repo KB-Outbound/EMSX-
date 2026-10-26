@@ -1,0 +1,10 @@
+{
+  "team_name": "HDGB",
+  "max_shares": 10000,
+  "allowed_sides": ["BUY", "SELL"],
+  "require_nonblank_account": true,
+  "production_write_enabled": false,
+  "production_team_hdgb_approved": false,
+  "production_all_accounts_approved": false,
+  "beta_write_enabled": false
+}
