@@ -12,12 +12,12 @@ from tkinter import ttk, filedialog, messagebox
 
 from bloomberg_feed import BloombergWorker
 from demo_feed import DemoWorker
-from desk_core import DeskBook
+from desk_core import DeskBook, line_status
 from ack_engine import load_config, eligibility, write_authorized
 
-from ui_text import APP_TITLE, localize
+from ui_text import APP_TITLE, DESK_TITLE, localize
 
-VERSION = "2.4.1"
+VERSION = "2.4.2"
 APP_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "EMSX_Desk_Monitor_HDGB"
 ADMIN_CONFIG = APP_DIR / "admin_config.json"
 LEDGER_PATH = APP_DIR / "ack_journal.sqlite3"
@@ -39,6 +39,7 @@ class MonitorApp:
         self.arm_blocker = tk.StringVar(value="활성화 불가: 모니터링을 시작하십시오")
         self.worker = None
         self.env = tk.StringVar(value="DEMO")
+        self.environment_header = tk.StringVar(value=f"DEMO | {DESK_TITLE}")
         self.team = tk.StringVar(value=self.admin_config["team_name"])
         self.search = tk.StringVar()
         self.account_filter = tk.StringVar()
@@ -104,7 +105,9 @@ class MonitorApp:
         box.pack(fill="both", expand=True)
         h = ttk.Frame(box)
         h.pack(fill="x")
-        ttk.Label(h, text=APP_TITLE, font=("맑은 고딕", 16, "bold")).pack(side="left")
+        ttk.Label(
+            h, textvariable=self.environment_header, font=("맑은 고딕", 16, "bold")
+        ).pack(side="left")
         cfg = ttk.Frame(box)
         cfg.pack(fill="x", pady=(12, 8))
         ttk.Label(cfg, text="실행 환경").pack(side="left")
@@ -151,20 +154,19 @@ class MonitorApp:
         ).pack(side="left", padx=12)
         x = ttk.Frame(box)
         x.pack(fill="x", pady=(0, 6))
-        ttk.Label(x, text="Route 미확인 기준 (분)").pack(side="left")
+        ttk.Label(x, text="Route 미지정 기준 (분)").pack(side="left")
         ttk.Entry(x, textvariable=self.unrouted_min, width=5).pack(side="left", padx=5)
-        ttk.Label(x, text="체결 변화 없음 기준 (분)").pack(side="left", padx=(15, 0))
+        ttk.Label(x, text="미체결 정체 기준 (분)").pack(side="left", padx=(15, 0))
         ttk.Entry(x, textvariable=self.nofill_min, width=5).pack(side="left", padx=5)
         ttk.Label(
             x,
-            text="경고 시간은 모니터링 시작 이후 관측 시간을 기준으로 합니다.",
+            text="※ 경고 기준 시간: 모니터링 개시 시점부터 누적된 관측 시간 기준",
             foreground="#f0b86e",
         ).pack(side="left", padx=16)
         nb = ttk.Notebook(box)
         nb.pack(fill="both", expand=True)
         spec = {
             "Orders": [
-                ("seq", "Sequence", 80),
                 ("account", "Account", 148),
                 ("ticker", "Ticker", 152),
                 ("side", "Side", 60),
@@ -172,13 +174,13 @@ class MonitorApp:
                 ("filled", "Fill", 95),
                 ("remain", "Remain", 95),
                 ("fill_pct", "Fill %", 70),
-                ("status", "Status", 94),
+                ("line_status", "Line Status", 110),
+                ("instruction", "Instruction", 150),
                 ("brokers", "Brokers", 105),
                 ("routes", "Routes", 55),
                 ("warning", "점검 사항", 240),
             ],
             "Routes": [
-                ("seq", "Sequence", 78),
                 ("route_id", "Route#", 66),
                 ("account", "Account", 145),
                 ("ticker", "Ticker", 135),
@@ -187,7 +189,8 @@ class MonitorApp:
                 ("qty", "Route Qty", 90),
                 ("filled", "Fill", 90),
                 ("remain", "Remain", 90),
-                ("status", "Route Status", 110),
+                ("line_status", "Line Status", 110),
+                ("instruction", "Instruction", 150),
                 ("avg_price", "Avg Price", 90),
                 ("parent_visible", "상위 Order 확인", 98),
             ],
@@ -271,12 +274,12 @@ class MonitorApp:
             side="right"
         )
         acols = [
-            ("seq", "Sequence", 95),
             ("account", "Account", 165),
             ("ticker", "Ticker", 172),
             ("side", "Side", 75),
             ("qty", "Shares", 100),
-            ("status", "Order Status", 115),
+            ("line_status", "Line Status", 115),
+            ("instruction", "Instruction", 150),
             ("ack_state", "Ack 처리 상태", 220),
             ("ack_detail", "사유 / 응답", 300),
         ]
@@ -313,7 +316,7 @@ class MonitorApp:
         self.nb = nb
         footer = ttk.Frame(box)
         footer.pack(fill="x", pady=(8, 0))
-        ttk.Label(footer, text="문의: 정동화").pack(side="right")
+        ttk.Label(footer, textvariable=self.environment_header).pack(side="right")
         self._last_render = 0.0
 
     def _thresholds(self):
@@ -545,6 +548,7 @@ class MonitorApp:
             self.root.after(10 if not self.messages.empty() else 50, self._pump)
 
     def _render(self) -> None:
+        self.environment_header.set(f"{self.env.get()} | {DESK_TITLE}")
         a, b = self._thresholds()
         rows = self.book.full_view(a, b)
         stats = self.book.counters()
@@ -677,7 +681,8 @@ class MonitorApp:
                     str(f.get("EMSX_TICKER") or ""),
                     str(f.get("EMSX_SIDE") or ""),
                     str(f.get("EMSX_AMOUNT") or ""),
-                    str(f.get("EMSX_STATUS") or ""),
+                    line_status(f.get("EMSX_STATUS")),
+                    str(f.get("EMSX_HAND_INSTRUCTION") or ""),
                     localize(state),
                     localize(detail),
                 )
@@ -686,10 +691,10 @@ class MonitorApp:
         for row in pending:
             iid = str(row[0])
             if iid in previous:
-                self.ack_tree.item(iid, values=row)
+                self.ack_tree.item(iid, values=row[1:])
                 previous.remove(iid)
             else:
-                self.ack_tree.insert("", "end", iid=iid, values=row)
+                self.ack_tree.insert("", "end", iid=iid, values=row[1:])
         for obsolete in previous:
             self.ack_tree.delete(obsolete)
 

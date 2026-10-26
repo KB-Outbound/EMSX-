@@ -28,7 +28,8 @@ class DemoWorker(threading.Thread):
             self.emit('data',feed='O',status=4,fields={
                 'API_SEQ_NUM':n,'EMSX_SEQUENCE':seq,'EMSX_ACCOUNT':account,
                 'EMSX_TICKER':ticker,'EMSX_SIDE':side,'EMSX_AMOUNT':amount,
-                'EMSX_FILLED':filled,'EMSX_STATUS':status,'EMSX_TRADER':'DEMO'})
+                'EMSX_FILLED':filled,'EMSX_STATUS':status,'EMSX_TRADER':'DEMO',
+                'EMSX_HAND_INSTRUCTION':'ANY'})
         self.emit('data',feed='O',status=11,fields={})
         i=0
         for seq,account,ticker,side,amount,status,broker,filled in SAMPLE:

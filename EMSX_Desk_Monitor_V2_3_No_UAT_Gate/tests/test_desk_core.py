@@ -40,7 +40,7 @@ class TestProjector(unittest.TestCase):
         self.ready()
         self.assertEqual(self.b.full_view()[0]['warning'],'')
         self.clock[0]+=301
-        self.assertIn('라우트',self.b.full_view()[0]['warning'])
+        self.assertIn('Route 미지정',self.b.full_view()[0]['warning'])
     def test_snapshot_not_older_than_actual_age(self):
         self.order(EMSX_AMOUNT=100,EMSX_STATUS='NEW')
         self.assertEqual(self.b.full_view()[0]['warning'],'')
@@ -78,7 +78,7 @@ class TestProjector(unittest.TestCase):
         self.order(EMSX_AMOUNT=100,EMSX_FILLED=10,EMSX_STATUS='WORKING')
         self.route(EMSX_AMOUNT=100,EMSX_FILLED=10,EMSX_BROKER='J',EMSX_STATUS='WORKING')
         self.ready();self.clock[0]+=901
-        self.assertIn('체결 변화',self.b.full_view()[0]['warning'])
+        self.assertIn('미체결 정체',self.b.full_view()[0]['warning'])
     def test_no_false_double_counting_fill_events(self):
         self.route(EMSX_AMOUNT=100,EMSX_FILLED=10)
         self.route(7,EMSX_FILLED=10)

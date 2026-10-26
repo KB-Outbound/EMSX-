@@ -43,3 +43,13 @@ python -m unittest discover -s tests -v
 - 거래 용어와 내부 API·상태 코드·기존 설정을 보존하고 표시 계층에서만 번역합니다.
 - 기존 59개 테스트 및 Python 컴파일 검사를 통과했습니다. Windows 실행 파일 생성과
   실제 화면 렌더링은 현재 환경에서 검증하지 않았습니다.
+
+
+## 2.4.2 데스크 표시 및 필드 보완
+
+- Sequence를 Order·Route·자동 수신확인 표와 CSV에서 제거하고 내부 안전 검사에는 유지했습니다.
+- EMSX_STATUS 기반 Line Status와 EMSX_HAND_INSTRUCTION 기반 Instruction을 표시합니다.
+- Assign·Cancel·Part-filled 상태 및 Instruction의 부분 갱신 보존을 검증했습니다.
+- 경고 문구를 Route 미지정·미체결 정체로 통일하고 관측 시간 안내를 정리했습니다.
+- 담당자명은 최상위 창 제목과 제품 정보에만 유지하며 실행 환경 제목과 하단에서 제거했습니다.
+- 총 62개 테스트, 컴파일 검사와 수정 모듈 정적 검사를 통과했습니다.

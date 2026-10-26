@@ -16,11 +16,40 @@ TERMINAL = {
     "COMPLETED",
     "CANCEL",
     "CANCELLED",
+    "CANCELED",
     "EXPIRED",
     "REJECTED",
     "DELETED",
 }
-PENDING = {"NEW", "ORD-PEND"}
+PENDING = {"NEW", "ORD-PEND", "ASSIGN", "ASSIGNED"}
+
+
+LINE_STATUS = {
+    "ASSIGN": "Assign",
+    "ASSIGNED": "Assign",
+    "CANCEL": "Cancel",
+    "CANCELLED": "Cancel",
+    "CANCELED": "Cancel",
+    "PARTFILL": "Part-filled",
+    "PARTFILLED": "Part-filled",
+    "PART-FILLED": "Part-filled",
+    "WORKING": "Working",
+    "FILLED": "Filled",
+    "COMPLETED": "Completed",
+    "NEW": "New",
+    "ORD-PEND": "Ord-pend",
+    "SENT": "Sent",
+    "HOLD": "Hold",
+    "EXPIRED": "Expired",
+    "REJECTED": "Rejected",
+    "DELETED": "Deleted",
+}
+
+
+def line_status(value: Any) -> str:
+    """EMSX_STATUS를 화면용 Line Status로 표시하며 미지의 값은 보존한다."""
+    raw = text(value).strip()
+    return LINE_STATUS.get(raw.upper(), raw)
 
 
 def num(value: Any) -> int:
@@ -190,7 +219,7 @@ class DeskBook:
                     and status in PENDING
                     and now - rec.first_seen >= unrouted_minutes * 60
                 ):
-                    warning.append("라우트 미확인(관측 기준)")
+                    warning.append("Route 미지정(관측 기준)")
                 active_routes = [
                     x
                     for x in route_records
@@ -200,6 +229,9 @@ class DeskBook:
                         "WORKING",
                         "PARTFILL",
                         "PARTFILLED",
+                        "PART-FILLED",
+                        "ASSIGN",
+                        "ASSIGNED",
                         "HOLD",
                         "CXLREQ",
                         "REPPEN",
@@ -212,7 +244,7 @@ class DeskBook:
                     and now - max(x.last_fill_change for x in active_routes)
                     >= nofill_minutes * 60
                 ):
-                    warning.append("체결 변화 없음(관측 기준)")
+                    warning.append("미체결 정체(관측 기준)")
                 if (
                     route_records
                     and not active_routes
@@ -220,7 +252,7 @@ class DeskBook:
                     and now - max(x.last_seen for x in route_records)
                     >= unrouted_minutes * 60
                 ):
-                    warning.append("라우트 종료 후 잔량 점검")
+                    warning.append("Route 종료 후 잔량 점검")
             rows.append(
                 {
                     "seq": seq,
@@ -232,6 +264,8 @@ class DeskBook:
                     "remain": remain,
                     "fill_pct": safe_pct(filled, qty),
                     "status": status,
+                    "line_status": line_status(f.get("EMSX_STATUS")),
+                    "instruction": text(f.get("EMSX_HAND_INSTRUCTION")),
                     "brokers": ",".join(broker_codes),
                     "routes": len(route_records),
                     "warning": " / ".join(warning),
@@ -266,6 +300,8 @@ class DeskBook:
                     "filled": filled,
                     "remain": max(0, qty - filled),
                     "status": text(f.get("EMSX_STATUS")),
+                    "line_status": line_status(f.get("EMSX_STATUS")),
+                    "instruction": text(pf.get("EMSX_HAND_INSTRUCTION")),
                     "avg_price": text(f.get("EMSX_AVG_PRICE")),
                     "parent_missing": parent is None,
                     "parent_visible": "NO" if parent is None else "YES",
