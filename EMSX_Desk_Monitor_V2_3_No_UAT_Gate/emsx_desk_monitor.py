@@ -16,8 +16,16 @@ from desk_core import DeskBook, line_status
 from ack_engine import load_config, eligibility, write_authorized
 
 from ui_text import APP_TITLE, DESK_TITLE, localize
+from kb_theme import (
+    BACKGROUND,
+    TEXT,
+    GOLD,
+    apply_theme,
+    configure_rows,
+    row_tags,
+)
 
-VERSION = "2.4.2"
+VERSION = "2.4.3"
 APP_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "EMSX_Desk_Monitor_HDGB"
 ADMIN_CONFIG = APP_DIR / "admin_config.json"
 LEDGER_PATH = APP_DIR / "ack_journal.sqlite3"
@@ -56,58 +64,14 @@ class MonitorApp:
         self.root.after(250, self._pump)
 
     def _make_ui(self) -> None:
-        style = ttk.Style()
-        style.theme_use("clam")
-        self.root.configure(background="#101720")
-        style.configure(
-            ".", background="#101720", foreground="#e1e7ef", font=("맑은 고딕", 10)
-        )
-        style.configure("TFrame", background="#101720")
-        style.configure("TLabel", background="#101720")
-        style.configure("TButton", background="#26364a", padding=(10, 6))
-        style.map(
-            "TButton",
-            background=[("active", "#36516e")],
-            foreground=[("disabled", "#8593a5")],
-        )
-        style.configure(
-            "TEntry",
-            fieldbackground="#1b2635",
-            foreground="#e1e7ef",
-            insertcolor="#e1e7ef",
-        )
-        style.configure("TCombobox", fieldbackground="#1b2635", arrowcolor="#e1e7ef")
-        style.map(
-            "TCombobox",
-            fieldbackground=[("readonly", "#1b2635")],
-            foreground=[("readonly", "#e1e7ef")],
-        )
-        style.configure("TNotebook", background="#101720", borderwidth=0)
-        style.configure("TNotebook.Tab", background="#1b2635", padding=(14, 7))
-        style.map("TNotebook.Tab", background=[("selected", "#304860")])
-        style.configure(
-            "Treeview",
-            rowheight=27,
-            background="#172230",
-            fieldbackground="#172230",
-            foreground="#e1e7ef",
-            borderwidth=0,
-        )
-        style.configure("Treeview.Heading", background="#26364a", foreground="#e1e7ef")
-        style.map(
-            "Treeview",
-            background=[("selected", "#305578")],
-            foreground=[("selected", "#ffffff")],
-        )
-        self.root.option_add("*TCombobox*Listbox.background", "#1b2635")
-        self.root.option_add("*TCombobox*Listbox.foreground", "#e1e7ef")
+        apply_theme(self.root)
         box = ttk.Frame(self.root, padding=12)
         box.pack(fill="both", expand=True)
         h = ttk.Frame(box)
         h.pack(fill="x")
-        ttk.Label(
-            h, textvariable=self.environment_header, font=("맑은 고딕", 16, "bold")
-        ).pack(side="left")
+        ttk.Label(h, textvariable=self.environment_header, style="Header.TLabel").pack(
+            side="left"
+        )
         cfg = ttk.Frame(box)
         cfg.pack(fill="x", pady=(12, 8))
         ttk.Label(cfg, text="실행 환경").pack(side="left")
@@ -122,19 +86,24 @@ class MonitorApp:
         ttk.Label(cfg, text="구독 팀").pack(side="left", padx=(12, 0))
         self.team_ctrl = ttk.Entry(cfg, textvariable=self.team, width=22)
         self.team_ctrl.pack(side="left", padx=5)
-        self.start_btn = ttk.Button(cfg, text="모니터링 시작", command=self.start)
+        self.start_btn = ttk.Button(
+            cfg, text="모니터링 시작", command=self.start, style="Primary.TButton"
+        )
         self.start_btn.pack(side="left", padx=(12, 4))
         self.stop_btn = ttk.Button(
             cfg, text="모니터링 중지", command=self.stop, state="disabled"
         )
         self.stop_btn.pack(side="left", padx=4)
         ttk.Button(cfg, text="현재 탭 CSV 저장", command=self.export).pack(side="right")
-        ttk.Label(box, textvariable=self.status, foreground="#87c5e5").pack(anchor="w")
-        ttk.Label(box, textvariable=self.feed_state, foreground="#a8b6c8").pack(
+        self.status_badge = ttk.Label(
+            box, textvariable=self.status, style="Badge.TLabel"
+        )
+        self.status_badge.pack(anchor="w", pady=(4, 2))
+        ttk.Label(box, textvariable=self.feed_state, style="Muted.TLabel").pack(
             anchor="w", pady=(2, 0)
         )
         ttk.Separator(box).pack(fill="x", pady=8)
-        ttk.Label(box, textvariable=self.counts, font=("Segoe UI", 12, "bold")).pack(
+        ttk.Label(box, textvariable=self.counts, style="Metric.TLabel").pack(
             anchor="w", pady=(0, 8)
         )
         filt = ttk.Frame(box)
@@ -161,7 +130,7 @@ class MonitorApp:
         ttk.Label(
             x,
             text="※ 경고 기준 시간: 모니터링 개시 시점부터 누적된 관측 시간 기준",
-            foreground="#f0b86e",
+            foreground=GOLD,
         ).pack(side="left", padx=16)
         nb = ttk.Notebook(box)
         nb.pack(fill="both", expand=True)
@@ -232,12 +201,15 @@ class MonitorApp:
                     else "w",
                     stretch=key in ("account", "ticker", "warning"),
                 )
-            tree.tag_configure("alert", background="#49351f")
-            tree.tag_configure("stale", foreground="#9ba8b8")
+            configure_rows(tree)
             sb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
-            tree.configure(yscrollcommand=sb.set)
-            tree.pack(side="left", fill="both", expand=True)
-            sb.pack(side="right", fill="y")
+            horizontal = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
+            tree.configure(yscrollcommand=sb.set, xscrollcommand=horizontal.set)
+            frame.rowconfigure(0, weight=1)
+            frame.columnconfigure(0, weight=1)
+            tree.grid(row=0, column=0, sticky="nsew")
+            sb.grid(row=0, column=1, sticky="ns")
+            horizontal.grid(row=1, column=0, sticky="ew")
             self.tabs[label] = {"columns": [c[0] for c in columns], "tree": tree}
         ack_frame = ttk.Frame(nb, padding=8)
         nb.add(ack_frame, text="자동 수신확인(Ack)")
@@ -245,16 +217,20 @@ class MonitorApp:
             ack_frame,
             text="활성화 이후 새로 수신한 E2E ORD-PEND Order만 자동 수신확인합니다. "
             "기존 Order는 처리하지 않습니다.",
-            foreground="#f0b86e",
+            foreground=GOLD,
             wraplength=1100,
         ).pack(anchor="w")
         h2 = ttk.Frame(ack_frame)
         h2.pack(fill="x", pady=8)
-        ttk.Label(h2, textvariable=self.arm_state, font=("Segoe UI", 11, "bold")).pack(
+        ttk.Label(h2, textvariable=self.arm_state, style="Badge.TLabel").pack(
             side="left", padx=(0, 18)
         )
         self.arm_btn = ttk.Button(
-            h2, text="자동 수신확인(Ack) 활성화", command=self.arm_ack, state="disabled"
+            h2,
+            text="자동 수신확인(Ack) 활성화",
+            command=self.arm_ack,
+            state="disabled",
+            style="Primary.TButton",
         )
         self.arm_btn.pack(side="left", padx=4)
         self.disarm_btn = ttk.Button(
@@ -264,7 +240,7 @@ class MonitorApp:
         ttk.Label(
             ack_frame,
             textvariable=self.arm_blocker,
-            foreground="#f0b86e",
+            foreground=GOLD,
             wraplength=1150,
         ).pack(anchor="w", pady=(0, 8))
         ttk.Button(h2, text="활성화 조건 확인", command=self.show_arm_diagnostics).pack(
@@ -283,20 +259,34 @@ class MonitorApp:
             ("ack_state", "Ack 처리 상태", 220),
             ("ack_detail", "사유 / 응답", 300),
         ]
+        ack_table = ttk.Frame(ack_frame)
+        ack_table.pack(fill="both", expand=True)
+        ack_table.rowconfigure(0, weight=1)
+        ack_table.columnconfigure(0, weight=1)
         self.ack_tree = ttk.Treeview(
-            ack_frame, columns=[c[0] for c in acols], show="headings"
+            ack_table, columns=[c[0] for c in acols], show="headings"
         )
+        configure_rows(self.ack_tree)
         for col, label, width in acols:
             self.ack_tree.heading(col, text=label)
             self.ack_tree.column(
-                col, width=width, stretch=col in ("account", "ticker", "ack_detail")
+                col,
+                width=width,
+                anchor="e" if col == "qty" else "w",
+                stretch=col in ("account", "ticker", "ack_detail"),
             )
         ack_scroll = ttk.Scrollbar(
-            ack_frame, orient="vertical", command=self.ack_tree.yview
+            ack_table, orient="vertical", command=self.ack_tree.yview
         )
-        self.ack_tree.configure(yscrollcommand=ack_scroll.set)
-        self.ack_tree.pack(side="left", fill="both", expand=True)
-        ack_scroll.pack(side="right", fill="y")
+        ack_horizontal = ttk.Scrollbar(
+            ack_table, orient="horizontal", command=self.ack_tree.xview
+        )
+        self.ack_tree.configure(
+            yscrollcommand=ack_scroll.set, xscrollcommand=ack_horizontal.set
+        )
+        self.ack_tree.grid(row=0, column=0, sticky="nsew")
+        ack_scroll.grid(row=0, column=1, sticky="ns")
+        ack_horizontal.grid(row=1, column=0, sticky="ew")
         activity = ttk.Frame(nb, padding=3)
         nb.add(activity, text="Event Log")
         log = tk.Text(
@@ -305,10 +295,10 @@ class MonitorApp:
             wrap="word",
             font=("맑은 고딕", 10),
             state="disabled",
-            background="#101720",
-            foreground="#d5dfeb",
-            insertbackground="#d5dfeb",
-            selectbackground="#305578",
+            background=BACKGROUND,
+            foreground=TEXT,
+            insertbackground=GOLD,
+            selectbackground="#51451E",
             relief="flat",
         )
         log.pack(fill="both", expand=True)
@@ -549,6 +539,13 @@ class MonitorApp:
 
     def _render(self) -> None:
         self.environment_header.set(f"{self.env.get()} | {DESK_TITLE}")
+        self.status_badge.configure(
+            style=(
+                "Danger.Badge.TLabel"
+                if self.book.stream_error or self.book.event_gaps
+                else "Badge.TLabel"
+            )
+        )
         a, b = self._thresholds()
         rows = self.book.full_view(a, b)
         stats = self.book.counters()
@@ -622,11 +619,15 @@ class MonitorApp:
                     if name == "Routes"
                     else str(item["broker"])
                 )
-                tags = ("alert",) if item.get("warning") else ()
+                tags = row_tags(
+                    idx, item.get("line_status", ""), bool(item.get("warning"))
+                )
                 if iid in stale:
                     stale.remove(iid)
-                    if tuple(str(x) for x in tree.item(iid, "values")) != tuple(
-                        str(x) for x in cells
+                    if (
+                        tuple(str(x) for x in tree.item(iid, "values"))
+                        != tuple(str(x) for x in cells)
+                        or tuple(tree.item(iid, "tags")) != tags
                     ):
                         tree.item(iid, values=cells, tags=tags)
                     tree.move(iid, "", idx)
@@ -688,13 +689,14 @@ class MonitorApp:
                 )
             )
         previous = set(self.ack_tree.get_children())
-        for row in pending:
+        for index, row in enumerate(pending):
             iid = str(row[0])
+            tags = row_tags(index, row[5])
             if iid in previous:
-                self.ack_tree.item(iid, values=row[1:])
+                self.ack_tree.item(iid, values=row[1:], tags=tags)
                 previous.remove(iid)
             else:
-                self.ack_tree.insert("", "end", iid=iid, values=row[1:])
+                self.ack_tree.insert("", "end", iid=iid, values=row[1:], tags=tags)
         for obsolete in previous:
             self.ack_tree.delete(obsolete)
 
