@@ -113,3 +113,21 @@ dist\EMSX_Desk_Monitor_HDGB_V2.exe
 재연결, 동시성 보호, Ack 안전장치, 검증 범위와 기존 설정 이관은
 [2.4 변경 안내](CHANGELOG_V2_4_KO.md)를 참조하십시오.
 추가 모듈 `synchronization.py`를 기존 실행 파일들과 함께 배포해야 합니다.
+
+## 2.4.1 화면 및 제품 정보
+
+창 제목과 상단 제목은 `KB증권 해외주식영업부 - EMSX 모니터 - 정동화`이며,
+하단에 `문의: 정동화`를 상시 표시합니다. 화면은 다크 테마를 사용합니다.
+Order, Account, Ticker, Sequence, Side, Shares, Price, Broker, Status,
+Event Log 등 거래·기술 용어와 원본 데이터는 영어로 유지하고 운영 안내는 한국어로 표시합니다.
+불필요한 상단·하단 설명과 브랜드성 문구는 제거했습니다.
+
+Bloomberg 구독에 필요한 `TEAMVIEW` API 구문과 기존 `team_name` 설정,
+로컬 설정·저널 경로는 유지합니다. 화면에서는 `구독 팀`으로 표시합니다.
+내부 Ack 상태 코드는 DB·연동 호환성을 위해 유지하고 화면에서만 번역합니다.
+외부 API 응답과 운영체제 예외의 원문은 정확한 장애 분석을 위해 보존합니다.
+
+`build_windows.bat`는 `windows_version_info.txt`를 읽어 제품명과 파일 설명을 설정하며,
+결과물은 `dist\EMSX_Monitor.exe`입니다. 파일명은 Windows 배포 편의를 위해 영문을 사용합니다.
+`ui_text.py`와 `windows_version_info.txt`도 배포·빌드 폴더에 포함해야 합니다.
+Windows 빌드 콘솔은 UTF-8을 사용합니다.

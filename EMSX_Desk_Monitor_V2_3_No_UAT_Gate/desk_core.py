@@ -106,9 +106,7 @@ class DeskBook:
         self.event_gaps = self.event_gaps[-300:]
         if status == 11:
             self.snapshot_done[feed] = True
-            self.notice(
-                f"{'ORDER' if feed == 'O' else 'ROUTE'} initial snapshot complete"
-            )
+            self.notice(f"{'ORDER' if feed == 'O' else 'ROUTE'} 초기 데이터 수신 완료")
             return
         if status == 1:
             return
@@ -132,7 +130,7 @@ class DeskBook:
         target = self.orders if feed == "O" else self.routes
         if status == 8:
             target.pop(key, None)
-            self.notice(f"{feed} {key} deleted from feed")
+            self.notice(f"{feed} {key} 구독에서 삭제됨")
             return
         now = self.now()
         if key not in target:
@@ -142,7 +140,7 @@ class DeskBook:
                 from_snapshot=(status == 4 or initial),
             )
             if status == 6:
-                self.notice(f"New {'order' if feed == 'O' else 'route'}: {key}")
+                self.notice(f"신규 {'order' if feed == 'O' else 'route'}: {key}")
         record = target[key]
         prior_fill = num(record.fields.get("EMSX_FILLED"))
         record.fields.update({k: v for k, v in fields.items() if v is not None})

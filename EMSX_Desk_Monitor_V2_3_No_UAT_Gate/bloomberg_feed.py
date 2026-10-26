@@ -72,9 +72,9 @@ def read_field(msg: Any, field: str) -> Any:
 
 def team_topic(service: str, kind: str, fields: dict[str, Any], team: str = "") -> str:
     if kind not in ("order", "route"):
-        raise ValueError("Invalid stream kind")
+        raise ValueError("지원하지 않는 구독 유형")
     if team and not re.fullmatch(r"[\w .-]{1,80}", team, re.UNICODE):
-        raise ValueError("Unsupported TEAMVIEW name characters")
+        raise ValueError("구독 팀 이름에 허용되지 않은 문자가 있습니다")
     suffix = f";team={team}" if team else ""
     return f"{service}/{kind}{suffix}?fields={','.join(fields)}"
 
@@ -272,9 +272,7 @@ class BloombergWorker(threading.Thread):
 
     def _run_session(self, A: Any) -> None:
         if not self.team:
-            raise ValueError(
-                "Unified program requires an explicit TEAMVIEW name (HDGB)"
-            )
+            raise ValueError("승인된 구독 팀 이름이 필요합니다")
         service = (
             "//blp/emapisvc_beta" if self.environment == "BETA" else "//blp/emapisvc"
         )
@@ -284,9 +282,9 @@ class BloombergWorker(threading.Thread):
         opts.setServerPort(8194)
         self.session = A.Session(opts)
         if not self.session.start():
-            raise RuntimeError("Bloomberg localhost:8194 session start failed")
+            raise RuntimeError("Bloomberg localhost:8194 세션 시작 실패")
         if not self.session.openService(service):
-            raise RuntimeError(f"Cannot open EMSX service {service}")
+            raise RuntimeError(f"EMSX 서비스 열기 실패: {service}")
         self.service = self.session.getService(service)
         self.api = A
         self.ledger = AckLedger(Path(self.ledger_path))
@@ -309,7 +307,7 @@ class BloombergWorker(threading.Thread):
         self.emit(
             "connected",
             message=(
-                f"{self.environment} / TEAMVIEW={self.team} "
+                f"{self.environment} / 구독 팀={self.team} "
                 "주문·라우트 구독 / 자동 Ack 해제"
             ),
         )
