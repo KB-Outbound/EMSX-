@@ -160,18 +160,28 @@ def configure_rows(tree: ttk.Treeview) -> None:
     tree.tag_configure("working", foreground=GOLD)
     tree.tag_configure("terminal", foreground=MUTED)
     tree.tag_configure("alert", background="#3B301A", foreground="#FFE58A")
+    tree.tag_configure(
+        "adv",
+        background="#4A3B00",
+        foreground="#FFE46B",
+        font=("맑은 고딕", 10, "bold"),
+    )
     tree.tag_configure("danger", background="#3B2020", foreground=DANGER)
 
 
-def row_tags(index: int, status: str = "", warning: bool = False) -> tuple[str, ...]:
-    """행 배경과 상태 강조를 계산한다. 원본 거래 상태는 바꾸지 않는다."""
+def row_tags(
+    index: int, status: str = "", warning: bool = False, adv: bool = False
+) -> tuple[str, ...]:
+    """배경 태그를 하나만 부여해 교차 배경이 경고·ADV 강조를 덮지 않도록 한다."""
+    if status == "Rejected":
+        return ("danger",)
+    if warning:
+        return ("alert",)
+    if adv:
+        return ("adv",)
     tags = ["odd" if index % 2 else "even"]
     if status in {"Working", "Part-filled", "Assign", "Sent"}:
         tags.append("working")
     elif status in {"Cancel", "Filled", "Completed", "Expired", "Deleted"}:
         tags.append("terminal")
-    if warning:
-        tags.append("alert")
-    if status == "Rejected":
-        tags.append("danger")
     return tuple(tags)

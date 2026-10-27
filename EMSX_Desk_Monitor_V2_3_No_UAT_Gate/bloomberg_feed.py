@@ -15,6 +15,7 @@ from ack_engine import AckEngine, AckLedger
 from order_fields import recent_order
 from diagnostics import LOGGER, configure_diagnostics
 from feed_parsing import read_scalar, integer
+from reference_data import ReferenceDataFeed
 
 ORDER_FIELDS = [
     "API_SEQ_NUM",
@@ -111,6 +112,7 @@ class BloombergWorker(threading.Thread):
         self.api = None
         self.engine = None
         self.ledger = None
+        self.reference: ReferenceDataFeed | None = None
         self.started = set()
         self.snapshot_done = {"O": False, "R": False}
         self.seq_last = {"O": None, "R": None}
@@ -240,6 +242,10 @@ class BloombergWorker(threading.Thread):
                 )
             self.engine.set_ready(self._ready())
             self.engine.on_order(status, fields, self.snapshot_done["O"], self._ready())
+            if self.reference and status in (4, 6, 7):
+                order = self.engine.orders.get(order_id, {})
+                if recent_order(order):
+                    self.reference.queue_security(order.get("EMSX_TICKER"))
 
     def _subscription_reason(self, msg: Any) -> str:
         """원문 메시지 전체 대신 공급자가 제공한 실패 사유만 추출한다."""
@@ -397,13 +403,16 @@ class BloombergWorker(threading.Thread):
         self.emit("error", message=reason)
 
     def _process_response(self, event: Any) -> None:
+        final = event.eventType() == self.api.Event.RESPONSE
         for msg in event:
+            if self.reference and self.reference.handle_response(msg, final=False):
+                continue
             try:
                 ids = msg.correlationIds()
                 cid = ids[0].value() if ids else None
             except Exception:
                 cid = None
-            if cid is None:
+            if cid is None or not self.engine or cid not in self.engine.pending:
                 continue
             try:
                 typ = str(msg.messageType())
@@ -426,6 +435,8 @@ class BloombergWorker(threading.Thread):
                 read_field(msg, "MESSAGE") or read_field(msg, "ERROR_MESSAGE") or ""
             )
             self.engine.on_response(cid, typ, status, detail)
+        if self.reference:
+            self.reference.end_event(final)
 
     def _cleanup_session(self) -> None:
         """한 자원의 종료 실패가 나머지 자원의 정리를 막지 않도록 한다."""
@@ -440,6 +451,7 @@ class BloombergWorker(threading.Thread):
             except Exception:
                 LOGGER.exception("세션 자원 정리 실패")
         self.engine = self.session = self.ledger = self.service = None
+        self.reference = None
         self.enrichment_orders.clear()
         self.enrichment_seq.clear()
 
@@ -550,6 +562,7 @@ class BloombergWorker(threading.Thread):
             Path(self.ledger_path).with_name("ack_audit.jsonl"),
             date_guard=recent_order,
         )
+        self.reference = ReferenceDataFeed(self.session, A, self.emit, self._warn)
         order_subs = A.SubscriptionList()
         order_subs.add(
             topic=team_topic(service, "order", self.order_fields, self.team),
@@ -646,8 +659,15 @@ class BloombergWorker(threading.Thread):
                         return
             elif typ in (A.Event.RESPONSE, A.Event.PARTIAL_RESPONSE):
                 self._process_response(event)
+            elif typ == getattr(A.Event, "REQUEST_STATUS", -999):
+                if self.reference:
+                    for msg in event:
+                        self.reference.handle_response(msg, final=False)
+                    self.reference.end_event(True)
             elif typ in (A.Event.SESSION_STATUS, A.Event.SERVICE_STATUS, A.Event.ADMIN):
                 for msg in event:
+                    if self.reference and self.reference.handle_service(msg):
+                        continue
                     name = str(msg.messageType())
                     if name == "SlowConsumerWarning":
                         LOGGER.warning(
@@ -681,5 +701,7 @@ class BloombergWorker(threading.Thread):
             ):
                 self.enrichment_requested = True
                 self._subscribe_enrichment(A, service)
+            if self._ready() and self.reference:
+                self.reference.tick()
             if self.engine:
                 self.engine.check_pending()

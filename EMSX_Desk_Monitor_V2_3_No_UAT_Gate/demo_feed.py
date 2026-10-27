@@ -6,11 +6,11 @@ import threading
 from order_fields import desk_today
 
 SAMPLE = [
-    (820001, "FUND_ALPHA", "NVDA US Equity", "BUY", 5000, "WORKING", "JEFF", 3500),
-    (820002, "FUND_BETA", "MSFT US Equity", "SELL", 3000, "FILLED", "CANT", 3000),
-    (820003, "FUND_GAMMA", "TSM US Equity", "BUY", 2000, "NEW", "", 0),
-    (820004, "FUND_DELTA", "AAPL US Equity", "BUY", 10000, "WORKING", "GS", 2500),
-    (820005, "FUND_EPSILON", "AMZN US Equity", "SELL", 1200, "ORD-PEND", "", 0),
+    (820001, "FUND_ALPHA", "7203 JP Equity", "BUY", 5000, "WORKING", "JEFF", 3500),
+    (820002, "FUND_BETA", "700 HK Equity", "SELL", 3000, "FILLED", "CANT", 3000),
+    (820003, "FUND_GAMMA", "2330 TT Equity", "BUY", 2000, "NEW", "", 0),
+    (820004, "FUND_DELTA", "BHP AU Equity", "BUY", 10000, "WORKING", "GS", 2500),
+    (820005, "FUND_EPSILON", "9984 JP Equity", "SELL", 1200, "ORD-PEND", "", 0),
 ]
 
 
@@ -34,6 +34,16 @@ class DemoWorker(threading.Thread):
         for seq, account, ticker, side, amount, status, broker, filled in SAMPLE:
             n += 1
             self.emit(
+                "reference",
+                security=ticker,
+                fields={
+                    "iso_country": ["JP", "HK", "TW", "AU", "JP"][n - 1],
+                    "sec_type": "Common Stock",
+                    "avg_volume_5d": 50000,
+                    "avg_volume_20d": 100000 if n != 4 else 50000,
+                },
+            )
+            self.emit(
                 "data",
                 feed="O",
                 status=4,
@@ -47,7 +57,7 @@ class DemoWorker(threading.Thread):
                     "EMSX_FILLED": filled,
                     "EMSX_STATUS": status,
                     "EMSX_TRADER": "DEMO",
-                    "EMSX_NOTES": "TWAP" if n % 2 else "MOC",
+                    "EMSX_NOTES": "MOC" if n % 2 else "TWAP",
                     "EMSX_BASKET_NAME": "DEMO_ALPHA" if n % 2 else "DEMO_BETA",
                     "EMSX_DATE": int(desk_today().strftime("%Y%m%d")),
                     "EMSX_TIME": 32400 + n,

@@ -16,6 +16,7 @@ from demo_feed import DemoWorker
 from desk_core import DeskBook, line_status
 from order_fields import recent_order, sort_orders, client_instruction, creation_fields
 from alerting import AlertTracker, play_alarm
+from risk_rules import format_adv
 from ack_engine import load_config, eligibility, write_authorized
 
 from ui_text import APP_TITLE, DESK_TITLE, localize
@@ -28,7 +29,7 @@ from kb_theme import (
     row_tags,
 )
 
-VERSION = "2.5.1"
+VERSION = "2.6.0"
 APP_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "EMSX_Desk_Monitor_HDGB"
 ADMIN_CONFIG = APP_DIR / "admin_config.json"
 LEDGER_PATH = APP_DIR / "ack_journal.sqlite3"
@@ -61,6 +62,9 @@ class MonitorApp:
         self.date_filter = tk.StringVar(value="오늘·전일")
         self.order_sort = tk.StringVar(value="최신순")
         self.sound_enabled = tk.BooleanVar(value=True)
+        self.adv_period = tk.StringVar(
+            value=str(self.admin_config.get("adv_period", 20)) + "D"
+        )
         self.alert_tracker = AlertTracker()
         self.eligible_ids: set[int] = set()
         self.alert_summary = tk.StringVar(value="Alerts 0")
@@ -125,9 +129,9 @@ class MonitorApp:
             anchor="w"
         )
         ttk.Separator(box).pack(fill="x", pady=8)
-        ttk.Label(box, textvariable=self.counts, style="Metric.TLabel").pack(
-            anchor="w", pady=(0, 8)
-        )
+        ttk.Label(
+            box, textvariable=self.counts, style="Metric.TLabel", wraplength=1000
+        ).pack(anchor="w", pady=(0, 8))
         filt = ttk.Frame(box)
         filt.pack(fill="x", pady=(0, 8))
         ttk.Label(filt, text="검색").pack(side="left")
@@ -165,25 +169,41 @@ class MonitorApp:
             width=17,
             state="readonly",
         ).pack(side="left", padx=6)
-        ttk.Checkbutton(scope, text="알림음", variable=self.sound_enabled).pack(
+        options = ttk.Frame(box)
+        options.pack(fill="x", pady=(0, 8))
+        ttk.Label(options, text="ADV 기준").pack(side="left", padx=(8, 0))
+        ttk.Combobox(
+            options,
+            textvariable=self.adv_period,
+            values=["20D", "5D"],
+            width=5,
+            state="readonly",
+        ).pack(side="left", padx=4)
+        ttk.Checkbutton(options, text="알림음", variable=self.sound_enabled).pack(
             side="left", padx=8
         )
-        ttk.Button(scope, text="알림음 확인", command=self._test_alarm).pack(
+        ttk.Button(options, text="알림음 확인", command=self._test_alarm).pack(
             side="right"
         )
+        ttk.Label(
+            options, text="ADV = Route 수량 / 평균 거래량 × 100", style="Muted.TLabel"
+        ).pack(side="left", padx=12)
         x = ttk.Frame(box)
         x.pack(fill="x", pady=(0, 6))
-        ttk.Label(x, text="Route 지연 기준 (분)").pack(side="left")
+        ttk.Label(x, text="FIX 수신 후 라우트 미실행 (Route 지연, 분)").pack(
+            side="left"
+        )
         ttk.Entry(x, textvariable=self.unrouted_min, width=5).pack(side="left", padx=5)
-        ttk.Label(x, text="미체결 정체 기준 (Route 후 No Fill)").pack(
+        ttk.Label(x, text="라우트 완료 후 체결 대기 (No-Fill 정체, 분)").pack(
             side="left", padx=(15, 0)
         )
         ttk.Entry(x, textvariable=self.nofill_min, width=5).pack(side="left", padx=5)
         ttk.Label(
-            x,
-            text="※ Alert 시간: Ack 상태·활성 Route 최초 관측 기준 (분)",
+            box,
+            text="※ FIX 수신 판정은 EMSX 상태 기준 · 지정 12개 ISO 국가만 적용 · 최초 관측 시간 기준 (분)",
             foreground=GOLD,
-        ).pack(side="left", padx=16)
+            wraplength=950,
+        ).pack(anchor="w", pady=(0, 6))
         nb = ttk.Notebook(box)
         nb.pack(fill="both", expand=True)
         spec = {
@@ -216,6 +236,10 @@ class MonitorApp:
                 ("remain", "Remain", 90),
                 ("line_status", "Line Status", 110),
                 ("instruction", "Instruction", 150),
+                ("iso_country", "ISO Country", 90),
+                ("sec_type", "Sec Type", 120),
+                ("adv_pct", "ADV (20D)", 100),
+                ("adv_reason", "ADV Check", 190),
                 ("avg_price", "Avg Price", 90),
                 ("parent_visible", "상위 Order 확인", 98),
             ],
@@ -253,6 +277,8 @@ class MonitorApp:
                         "remaining",
                         "routes",
                         "route_id",
+                        "adv_pct",
+                        "avg_price",
                     )
                     else "w",
                     stretch=key in ("account", "ticker", "warning"),
@@ -583,6 +609,10 @@ class MonitorApp:
                 elif typ == "connected":
                     self._append(localize(m["message"]))
                     self.status.set("연결됨 / 초기 데이터 수신 중 / 자동 수신확인 해제")
+                elif typ == "reference_unavailable":
+                    self.book.invalidate_reference()
+                elif typ == "reference":
+                    self.book.update_reference(m["security"], m["fields"])
                 elif typ == "warning":
                     self._append("수신 경고: " + m["message"])
                 elif typ == "diagnostics":
@@ -673,8 +703,12 @@ class MonitorApp:
             oldest_first=self.order_sort.get() == "과거순",
         )
         self.eligible_ids = {row["seq"] for row in rows}
+        period = 5 if self.adv_period.get() == "5D" else 20
+        self.tabs["Routes"]["tree"].heading("adv_pct", text=f"ADV ({period}D)")
         routes = [
-            row for row in self.book.route_view() if row["seq"] in self.eligible_ids
+            row
+            for row in self.book.route_view(period)
+            if row["seq"] in self.eligible_ids
         ]
         routes = sorted(
             routes,
@@ -686,8 +720,9 @@ class MonitorApp:
         stats = self.book.counters(rows, len(routes))
         self._update_alarms(rows)
         missing_dates = sum(not row["trade_date"] for row in all_rows)
+        missing_regions = sum(not row["iso_country"] for row in rows)
         self.counts.set(
-            f"Order {stats['orders']:,}  |  Route {stats['routes']:,}  |  Unrouted {stats['unrouted']:,}  |  Alerts {sum(bool(r['alert_types']) for r in rows):,}  |  Date Missing {missing_dates:,}"
+            f"Order {stats['orders']:,}  |  Route {stats['routes']:,}  |  Unrouted {stats['unrouted']:,}  |  Alerts {sum(bool(r['alert_types']) for r in rows):,}  |  Date Missing {missing_dates:,}  |  Region Missing {missing_regions:,}"
         )
         p = self.book
 
@@ -751,7 +786,9 @@ class MonitorApp:
             stale = set(tree.get_children())
             for idx, item in enumerate(visible):
                 cells = [
-                    f"{item.get(k, 0):,.1f}%"
+                    format_adv(item.get(k))
+                    if k == "adv_pct"
+                    else f"{item.get(k, 0):,.1f}%"
                     if k == "fill_pct"
                     else f"{item[k]:,}"
                     if k in ("qty", "filled", "remain", "routed", "remaining")
@@ -767,7 +804,10 @@ class MonitorApp:
                     else str(item["broker"])
                 )
                 tags = row_tags(
-                    idx, item.get("line_status", ""), bool(item.get("warning"))
+                    idx,
+                    item.get("line_status", ""),
+                    bool(item.get("warning")),
+                    bool(item.get("adv_check")),
                 )
                 if iid in stale:
                     stale.remove(iid)
@@ -892,7 +932,12 @@ class MonitorApp:
         try:
             with open(path, "w", newline="", encoding="utf-8-sig") as f:
                 w = csv.writer(f)
-                w.writerow(cols)
+                headers = list(cols)
+                if tab == "Routes" and "adv_pct" in headers:
+                    # 실제 표시 중인 기간을 기록하여 선택 직후의 화면 갱신 지연에도 맞춘다.
+                    period = 5 if tree.heading("adv_pct", "text") == "ADV (5D)" else 20
+                    headers[headers.index("adv_pct")] = f"adv_{period}d_pct"
+                w.writerow(headers)
                 for iid in tree.get_children():
                     w.writerow(tree.item(iid, "values"))
             self._append(f"CSV 저장 완료 ({tab}): {Path(path).name}")

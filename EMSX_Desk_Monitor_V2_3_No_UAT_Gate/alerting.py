@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from collections.abc import Callable
 from typing import Any
 
@@ -34,13 +35,19 @@ class AlertTracker:
 
 
 def play_alarm(fallback: Callable[[], Any]) -> None:
-    """Windows 시스템 경고음을 비동기로 재생하며 다른 환경에서는 창 알림을 사용한다."""
+    """고진폭 두 음의 반복 경보를 비동기 재생한다. 시스템 음량은 변경하지 않는다."""
     try:
         import winsound
     except ImportError:
         fallback()
         return
+    sound = Path(__file__).resolve().parent / "assets" / "desk_alert.wav"
     try:
-        winsound.PlaySound("SystemExclamation", winsound.SND_ALIAS | winsound.SND_ASYNC)
-    except RuntimeError:
+        if not sound.is_file():
+            raise OSError("경보음 파일이 없습니다")
+        winsound.PlaySound(
+            str(sound),
+            winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT,
+        )
+    except (RuntimeError, OSError):
         fallback()

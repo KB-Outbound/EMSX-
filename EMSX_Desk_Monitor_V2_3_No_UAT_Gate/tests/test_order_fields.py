@@ -37,10 +37,18 @@ class TestOrderFields(unittest.TestCase):
     def test_assign_cancel_and_part_filled_monitoring(self) -> None:
         clock = [0.0]
         book = DeskBook(now=lambda: clock[0])
+        book.update_reference("TEST HK Equity", {"iso_country": "HK"})
         for feed in ("O", "R"):
             book.ingest(feed, 11, {})
         book.ingest(
-            "O", 6, {"EMSX_SEQUENCE": 1, "EMSX_STATUS": "ASSIGN", "EMSX_AMOUNT": 100}
+            "O",
+            6,
+            {
+                "EMSX_SEQUENCE": 1,
+                "EMSX_STATUS": "ASSIGN",
+                "EMSX_AMOUNT": 100,
+                "EMSX_TICKER": "TEST HK Equity",
+            },
         )
         clock[0] = 301
         self.assertIn("Unrouted Warning", book.full_view()[0]["warning"])

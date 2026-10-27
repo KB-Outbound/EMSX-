@@ -305,6 +305,16 @@ class TestInitializationIntegration(unittest.TestCase):
                             )
                         ],
                     ),
+                    SimEvent(
+                        6,
+                        [
+                            Message(
+                                {"serviceName": "//blp/refdata"},
+                                70002,
+                                "ServiceOpenFailure",
+                            )
+                        ],
+                    ),
                     SimEvent(7, [Message({}, 901, "SlowConsumerWarning")]),
                     SimEvent(
                         1,

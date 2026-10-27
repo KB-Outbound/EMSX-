@@ -32,6 +32,7 @@ def default_config() -> dict[str, Any]:
         "production_team_hdgb_approved": False,
         "production_all_accounts_approved": False,
         "beta_write_enabled": False,
+        "adv_period": 20,
     }
 
 
@@ -66,6 +67,12 @@ def load_config(path: Path) -> dict[str, Any]:
         raise ValueError("allowed_sides must be a nonempty list")
     if not isinstance(cfg["team_name"], str) or not cfg["team_name"].strip():
         raise ValueError("team_name must be set")
+    if (
+        not isinstance(cfg["adv_period"], int)
+        or isinstance(cfg["adv_period"], bool)
+        or cfg["adv_period"] not in (5, 20)
+    ):
+        raise ValueError("adv_period는 5 또는 20이어야 합니다")
     return cfg
 
 

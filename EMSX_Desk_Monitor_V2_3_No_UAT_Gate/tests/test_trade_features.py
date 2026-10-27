@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import csv
 import tempfile
 import unittest
 from datetime import date
@@ -91,6 +92,7 @@ class TestDeskAlerts(unittest.TestCase):
     def setUp(self) -> None:
         self.clock = [0.0]
         self.book = DeskBook(now=lambda: self.clock[0])
+        self.book.update_reference("TEST JP Equity", {"iso_country": "JP"})
         for feed in ("O", "R"):
             self.book.ingest(feed, 11, {})
         self.book.ingest(
@@ -98,6 +100,7 @@ class TestDeskAlerts(unittest.TestCase):
             6,
             {
                 "EMSX_SEQUENCE": 1,
+                "EMSX_TICKER": "TEST JP Equity",
                 "EMSX_STATUS": "ORD-PEND",
                 "EMSX_AMOUNT": 100,
                 "EMSX_FILLED": 0,
@@ -177,10 +180,15 @@ class TestDeskAlerts(unittest.TestCase):
 
     def test_sound_uses_async_windows_api_and_fallback(self) -> None:
         fallback = Mock()
-        sound = SimpleNamespace(PlaySound=Mock(), SND_ALIAS=1, SND_ASYNC=2)
+        sound = SimpleNamespace(
+            PlaySound=Mock(), SND_FILENAME=1, SND_ASYNC=2, SND_NODEFAULT=4
+        )
         with patch.dict(sys.modules, {"winsound": sound}):
             play_alarm(fallback)
-            sound.PlaySound.assert_called_once_with("SystemExclamation", 3)
+            self.assertEqual(sound.PlaySound.call_args.args[1], 7)
+            self.assertTrue(
+                sound.PlaySound.call_args.args[0].endswith("desk_alert.wav")
+            )
             fallback.assert_not_called()
             sound.PlaySound.side_effect = RuntimeError("모의 장치 오류")
             play_alarm(fallback)
@@ -253,6 +261,9 @@ class Tree:
     def __init__(self) -> None:
         self.rows: dict[str, dict] = {}
 
+    def heading(self, column: str, **kwargs: Any) -> None:
+        pass
+
     def get_children(self) -> tuple[str, ...]:
         return tuple(self.rows)
 
@@ -274,6 +285,16 @@ class TestDisplayIntegration(unittest.TestCase):
     def test_date_basket_projection_and_alarm_dispatch(self) -> None:
         app = MonitorApp.__new__(MonitorApp)
         app.book = DeskBook(now=lambda: 1000)
+        app.book.update_reference(
+            ORDER["EMSX_TICKER"],
+            {
+                "iso_country": "JP",
+                "sec_type": "Common Stock",
+                "avg_volume_5d": 5000,
+                "avg_volume_20d": 10000,
+            },
+        )
+        app.adv_period = Variable("20D")
         for feed in ("O", "R"):
             app.book.ingest(feed, 11, {})
             app.book.subscriptions[feed] = "STARTED"
@@ -297,6 +318,16 @@ class TestDisplayIntegration(unittest.TestCase):
                 },
             )
             app.book.orders[seq].acknowledged_at = 0
+        app.book.ingest(
+            "R",
+            4,
+            {
+                "EMSX_SEQUENCE": 1,
+                "EMSX_ROUTE_ID": 1,
+                "EMSX_AMOUNT": 1000,
+                "EMSX_STATUS": "WORKING",
+            },
+        )
         for name, value in {
             "env": "PROD",
             "date_filter": "오늘·전일",
@@ -338,6 +369,7 @@ class TestDisplayIntegration(unittest.TestCase):
             }
             for name in ("Orders", "Routes", "Brokers")
         }
+        app.tabs["Routes"]["columns"] = ["create_time", "adv_pct", "adv_reason"]
         with (
             patch("order_fields.desk_today", return_value=TODAY),
             patch("emsx_desk_monitor.play_alarm") as sound,
@@ -346,6 +378,8 @@ class TestDisplayIntegration(unittest.TestCase):
             self.assertEqual(set(app.tabs["Orders"]["tree"].rows), {"1", "2"})
             self.assertEqual(app.tabs["Orders"]["tree"].rows["1"]["values"][-1], "MOC")
             sound.assert_called_once()
+            self.assertEqual(app.tabs["Routes"]["tree"].rows["1:1"]["values"][1], "10%")
+            self.assertEqual(app.tabs["Routes"]["tree"].rows["1:1"]["tags"], ("adv",))
             app.basket_filter.set("a")
             app._render()
             self.assertEqual(set(app.tabs["Orders"]["tree"].rows), {"1"})
@@ -359,3 +393,28 @@ class TestDisplayIntegration(unittest.TestCase):
             app.alert_tracker.last_sound = None
             app._render()
             sound.assert_called_once()
+
+    def test_route_csv_records_the_rendered_adv_period(self) -> None:
+        app = MonitorApp.__new__(MonitorApp)
+        app.nb = Mock()
+        app.nb.tab.return_value = "Routes"
+        tree = Mock()
+        tree.heading.return_value = "ADV (5D)"
+        tree.get_children.return_value = ("1",)
+        tree.item.return_value = ("TEST JP Equity", "2%")
+        app.tabs = {"Routes": {"tree": tree, "columns": ["ticker", "adv_pct"]}}
+        app._append = Mock()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "routes.csv")
+            with (
+                patch("emsx_desk_monitor.messagebox.askokcancel", return_value=True),
+                patch(
+                    "emsx_desk_monitor.filedialog.asksaveasfilename", return_value=path
+                ),
+                patch("emsx_desk_monitor.messagebox.showinfo"),
+            ):
+                app.export()
+            with open(path, encoding="utf-8-sig", newline="") as source:
+                rows = list(csv.reader(source))
+            self.assertEqual(rows[0], ["ticker", "adv_5d_pct"])
+            self.assertEqual(rows[1], ["TEST JP Equity", "2%"])

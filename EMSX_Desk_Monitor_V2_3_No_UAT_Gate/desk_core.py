@@ -12,6 +12,7 @@ import threading
 from synchronization import synchronized
 from diagnostics import LOGGER
 from feed_parsing import integer
+from risk_rules import country_code, asian_delay_eligible, route_adv_percent, adv_check
 from order_fields import client_instruction, creation_fields, sort_orders
 
 TERMINAL = {
@@ -110,6 +111,7 @@ class DeskBook:
         self.now = now or time.monotonic
         self.orders: dict[int, Record] = {}
         self.routes: dict[tuple[int, int], Record] = {}
+        self.reference: dict[str, dict[str, Any]] = {}
         self.snapshot_done = {"O": False, "R": False}
         self.subscriptions = {"O": "PENDING", "R": "PENDING"}
         self.seq_last = {"O": None, "R": None}
@@ -237,8 +239,31 @@ class DeskBook:
         """선택 구독 종료 시 마지막 수신 값을 현재 값처럼 표시하지 않는다."""
         if field_name not in {"EMSX_NOTES", "EMSX_BASKET_NAME", "EMSX_TIME"}:
             return
-        for record in self.orders.values():
+        for record in [*self.orders.values(), *self.routes.values()]:
             record.fields.pop(field_name, None)
+
+    @synchronized
+    def invalidate_reference(self) -> None:
+        """참조 서비스 단절 시 국가·ADV를 미확인으로 되돌린다."""
+        self.reference.clear()
+
+    @synchronized
+    def update_reference(self, security: str, fields: dict[str, Any]) -> None:
+        """선택 참조데이터는 주문 상태·Ack·구독 순번을 변경하지 않는다."""
+        key = security.strip().casefold()
+        if not key or not isinstance(fields, dict):
+            return
+        if key not in self.reference and len(self.reference) >= 100000:
+            LOGGER.warning("장부 참조데이터 한도 초과")
+            return
+        self.reference.setdefault(key, {}).update(
+            {
+                name: value
+                for name, value in fields.items()
+                if name
+                in {"iso_country", "sec_type", "avg_volume_5d", "avg_volume_20d"}
+            }
+        )
 
     @synchronized
     def full_view(
@@ -251,6 +276,9 @@ class DeskBook:
         rows = []
         for seq, rec in self.orders.items():
             f = rec.fields
+            metadata = self.reference.get(
+                text(f.get("EMSX_TICKER")).strip().casefold(), {}
+            )
             route_records = route_index.get(seq, [])
             broker_codes = sorted(
                 set(
@@ -272,7 +300,8 @@ class DeskBook:
                 if status == "ORD-PEND":
                     warning.append("Ack Pending")
                 if (
-                    not route_records
+                    asian_delay_eligible(metadata.get("iso_country"))
+                    and not route_records
                     and status in PENDING
                     and rec.acknowledged_at is not None
                     and now - rec.acknowledged_at >= unrouted_minutes * 60
@@ -282,7 +311,8 @@ class DeskBook:
                     route for route in route_records if route.active_since is not None
                 ]
                 if (
-                    active_routes
+                    asian_delay_eligible(metadata.get("iso_country"))
+                    and active_routes
                     and remain > 0
                     and known_zero(f.get("EMSX_FILLED"))
                     and all(
@@ -314,6 +344,7 @@ class DeskBook:
                     "status": status,
                     "line_status": line_status(f.get("EMSX_STATUS")),
                     "instruction": client_instruction(f),
+                    "iso_country": country_code(metadata.get("iso_country")),
                     "basket_name": text(f.get("EMSX_BASKET_NAME")),
                     **creation_fields(f),
                     "brokers": ",".join(broker_codes),
@@ -329,7 +360,7 @@ class DeskBook:
         return sort_orders(rows)
 
     @synchronized
-    def route_view(self) -> list[dict[str, Any]]:
+    def route_view(self, adv_period: int = 20) -> list[dict[str, Any]]:
         rows = []
         for (seq, rid), rec in self.routes.items():
             f = rec.fields
@@ -337,6 +368,18 @@ class DeskBook:
             pf = parent.fields if parent else {}
             qty = num(f.get("EMSX_AMOUNT"))
             filled = num(f.get("EMSX_FILLED"))
+            metadata = self.reference.get(
+                text(pf.get("EMSX_TICKER")).strip().casefold(), {}
+            )
+            adv_5d = route_adv_percent(
+                f.get("EMSX_AMOUNT"), metadata.get("avg_volume_5d")
+            )
+            adv_20d = route_adv_percent(
+                f.get("EMSX_AMOUNT"), metadata.get("avg_volume_20d")
+            )
+            adv_pct = adv_5d if adv_period == 5 else adv_20d
+            sec_type = text(metadata.get("sec_type"))
+            check, reason = adv_check(client_instruction(pf), sec_type, adv_pct)
             rows.append(
                 {
                     "seq": seq,
@@ -351,6 +394,13 @@ class DeskBook:
                     "status": text(f.get("EMSX_STATUS")),
                     "line_status": line_status(f.get("EMSX_STATUS")),
                     "instruction": client_instruction(pf),
+                    "iso_country": country_code(metadata.get("iso_country")),
+                    "sec_type": sec_type,
+                    "adv_pct": adv_pct,
+                    "adv_5d": adv_5d,
+                    "adv_20d": adv_20d,
+                    "adv_check": check,
+                    "adv_reason": reason,
                     "basket_name": text(pf.get("EMSX_BASKET_NAME")),
                     **creation_fields(pf),
                     "avg_price": text(f.get("EMSX_AVG_PRICE")),

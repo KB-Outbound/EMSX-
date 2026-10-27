@@ -11,9 +11,10 @@ class TestProjector(unittest.TestCase):
     def setUp(self):
         self.clock=[1000.]
         self.b=DeskBook(now=lambda:self.clock[0])
+        self.b.update_reference("TEST JP Equity", {"iso_country": "JP"})
         self.b.subscriptions={'O':'STARTED','R':'STARTED'}
     def order(self,status=4,seq=17,**kwargs):
-        return self.b.ingest('O',status,{'EMSX_SEQUENCE':seq, **kwargs})
+        return self.b.ingest('O',status,{'EMSX_SEQUENCE':seq, 'EMSX_TICKER':'TEST JP Equity', **kwargs})
     def route(self,status=4,seq=17,rid=1,**kwargs):
         return self.b.ingest('R',status,{'EMSX_SEQUENCE':seq,'EMSX_ROUTE_ID':rid,**kwargs})
     def ready(self):

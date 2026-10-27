@@ -18,7 +18,7 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-py -3 -m PyInstaller --noconfirm --clean --onefile --windowed --name EMSX_Monitor --version-file windows_version_info.txt --collect-all blpapi emsx_desk_monitor.py
+py -3 -m PyInstaller --noconfirm --clean --onefile --windowed --name EMSX_Monitor --version-file windows_version_info.txt --add-data "assets/desk_alert.wav;assets" --collect-all blpapi emsx_desk_monitor.py
 if errorlevel 1 (
   echo 오류: 실행 파일 빌드 실패.
   pause
