@@ -402,3 +402,12 @@ FIGI 식별자·음향 파일 형식·강조 우선순위·기존 Ack 회귀를 
 `build_windows.bat`는 온라인 설치 없이 `EMSX_Monitor.spec`로 빌드합니다.
 경보음과 BLPAPI DLL을 포함하며 완성된 실행 파일의 `--self-test`가 실패하면 빌드를 실패 처리합니다.
 Windows 실행 파일은 현재 Linux 작업 환경에서 생성·검증하지 않았습니다.
+
+
+## 2.6.2 Windows CMD 빌드 실행기 수정
+
+배치 파일은 ASCII·CRLF로 교체하고 빌드 처리를 `windows_build.py`로 옮겼습니다.
+프로젝트 폴더에서 `python windows_build.py download`를 완료한 후,
+`python windows_build.py prepare`, `python windows_build.py build`를 각각 별도 명령으로 실행합니다.
+다운로드는 연결 가능한 준비 PC에서만 수행하며, 설치는 로컬 wheelhouse만 사용합니다.
+BLPAPI는 Bloomberg 공식 저장소에서 받습니다. 상세 절차는 [오프라인 배포 안내](OFFLINE_DEPLOY_KO.md)를 참조하십시오.

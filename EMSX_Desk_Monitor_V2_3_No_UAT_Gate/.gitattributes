@@ -1,0 +1,2 @@
+# Windows 배치 파일의 실제 CRLF를 저장하여 ZIP에도 그대로 포함합니다.
+*.bat -text whitespace=cr-at-eol

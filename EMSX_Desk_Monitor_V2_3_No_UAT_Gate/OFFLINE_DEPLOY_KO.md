@@ -18,18 +18,39 @@ Linux에서 Windows 실행 파일로 교차 빌드할 수 없습니다. Python �
 BLPAPI·PyInstaller와 그 의존성의 wheel을 준비합니다. BLPAPI는 Bloomberg가 제공한 신뢰할 수 있는
 배포 경로 또는 승인된 내부 저장소의 wheel을 사용하십시오. 예시의 버전은 조직 승인 버전으로 고정해야 합니다.
 
+탐색기에서 `windows_build.py`와 `requirements.txt`가 보이는 프로젝트 폴더를 엽니다.
+주소창에 `cmd`를 입력하고 Enter를 누르면 해당 폴더의 명령 프롬프트가 열립니다.
+아래 명령은 **한 줄씩 입력하고 Enter를 누른 뒤, 완료되어 프롬프트가 돌아오면 다음 명령을 실행**합니다.
+
 ```bat
-python -m pip download --only-binary=:all: --dest wheelhouse -r requirements.txt
+python windows_build.py download
 ```
+
+이 명령은 PyInstaller 의존성은 기존 pip 인덱스, BLPAPI는 Bloomberg 공식 Python 저장소
+`https://blpapi.bloomberg.com/repository/releases/python/simple`에서 가져옵니다.
+공식 저장소 접근이 제한되거나 현재 Python 버전의 wheel이 없으면 실패를 그대로 보고합니다.
+인증서 검증을 끄거나 임의의 비공식 DLL로 대체하지 마십시오.
 
 필요한 BLPAPI wheel이 일반 패키지 저장소에 없으면 공식 배포본을 같은 폴더에 반입합니다.
 인터넷에서 무작위 DLL을 내려받거나 검증을 끄지 마십시오. wheelhouse의 해시·서명은 반입 정책에 따라 확인합니다.
 소스와 wheelhouse를 빌드 PC로 옮긴 뒤 실행합니다.
 
+먼저 설치를 실행합니다.
+
 ```bat
-prepare_offline.bat
-build_windows.bat
+python windows_build.py prepare
 ```
+
+설치가 성공한 뒤 빌드합니다.
+
+```bat
+python windows_build.py build
+```
+
+단축 실행기 `download_dependencies.bat`, `prepare_offline.bat`, `build_windows.bat`도 제공합니다.
+이 파일들은 ASCII·CRLF이며 같은 Python 도구에 작업을 위임합니다.
+`EMSX_BUILD_PYTHON`은 배치 실행기의 인터프리터 선택에 사용합니다.
+Python 도구를 직접 호출하면 현재 명령의 Python 실행 파일을 계속 사용합니다.
 
 `prepare_offline.bat`는 `--no-index`로 로컬 wheel만 설치합니다.
 `build_windows.bat`는 패키지 설치를 하지 않고 사전 검사·기존 테스트·spec 빌드·완성 파일 자체 검사를 수행합니다.
@@ -81,5 +102,18 @@ start "" "KB증권 해외주식영업부 EMSX 모니터.exe" --demo
 현재 Linux 환경에서 Windows 실행 파일을 생성하지 않았습니다.
 Windows 빌드·독립 실행·실제 Terminal·스피커 검증이 완료되었다고 간주하지 마십시오.
 
-현재 검증: 기존 테스트와 패키징 보조 기능 테스트를 포함한 110개 통과, Python·spec 구문 및 정적 검사 통과.
+현재 검증: 기존 테스트와 패키징 보조 기능 테스트를 포함한 115개 통과, Python·spec 구문 및 정적 검사 통과.
 이는 Windows 네이티브 빌드나 Python 없는 대상 PC의 검증 결과가 아닙니다.
+
+
+## 2.6.2 CMD 해석 오류 해결
+
+이전 배치 파일의 LF·UTF-8 한글·긴 인라인 명령을 제거했습니다.
+실제 배치 파일 바이트는 CRLF로 저장하고 `.gitattributes`로 Git의 LF 정규화를 막습니다.
+GitHub ZIP에도 CRLF가 포함되도록 보존합니다. 의존성 설치·빌드·자체 검사·실패 종료 코드는
+Python의 구조화된 subprocess 인수로 처리하여 CMD의 따옴표·한글 해석에 의존하지 않습니다.
+
+`requirements.txtprepare_offline.bat`나 `requirements.txtcd /d` 오류는 두 명령이 붙어서
+실행된 경우입니다. 입력 중인 줄이 남아 있으면 Esc로 비우고 명령 하나만 붙여넣은 뒤 Enter를 누르십시오.
+`프로젝트를 압축 해제한 실제 경로`는 실행할 경로가 아니므로 입력하지 마십시오.
+폴더 이동이 완료되고 requirements.txt를 확인한 상태라면 다시 이동할 필요가 없습니다.
