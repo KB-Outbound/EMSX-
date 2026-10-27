@@ -4,6 +4,7 @@ DESK_TITLE = "KB증권 해외주식영업부 EMSX 모니터"
 APP_TITLE = "KB증권 해외주식영업부 - EMSX 모니터 - 정동화"
 
 TEXT = {
+    "TRADE_DATE_OUT_OF_RANGE": "생성일이 오늘·전일 범위에 없거나 확인되지 않아 전송을 차단했습니다",
     "STARTED": "구독 정상",
     "PENDING": "대기 중",
     "RESERVED": "전송 예약",

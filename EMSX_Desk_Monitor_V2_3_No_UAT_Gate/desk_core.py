@@ -10,6 +10,7 @@ from typing import Any, Callable
 import time
 import threading
 from synchronization import synchronized
+from order_fields import client_instruction, creation_fields, sort_orders
 
 TERMINAL = {
     "FILLED",
@@ -21,7 +22,20 @@ TERMINAL = {
     "REJECTED",
     "DELETED",
 }
-PENDING = {"NEW", "ORD-PEND", "ASSIGN", "ASSIGNED"}
+PENDING = {"NEW", "ASSIGN", "ASSIGNED", "WORKING"}
+ACTIVE_ROUTES = {
+    "SENT",
+    "WORKING",
+    "PARTFILL",
+    "PARTFILLED",
+    "PART-FILLED",
+    "ASSIGN",
+    "ASSIGNED",
+    "HOLD",
+    "CXLREQ",
+    "REPPEN",
+    "REPLACE-PEND",
+}
 
 
 LINE_STATUS = {
@@ -63,6 +77,14 @@ def text(value: Any) -> str:
     return "" if value is None else str(value)
 
 
+def known_zero(value: Any) -> bool:
+    """누락·손상 체결량을 0으로 오인해 경고하지 않는다."""
+    try:
+        return not isinstance(value, bool) and float(value) == 0
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
 def safe_pct(filled: Any, amount: Any) -> float:
     return (
         round(min(100.0, 100.0 * num(filled) / num(amount)), 1) if num(amount) else 0.0
@@ -76,6 +98,8 @@ class Record:
     last_seen: float = 0.0
     last_fill_change: float = 0.0
     from_snapshot: bool = False
+    acknowledged_at: float | None = None
+    active_since: float | None = None
 
 
 class DeskBook:
@@ -159,6 +183,13 @@ class DeskBook:
         target = self.orders if feed == "O" else self.routes
         if status == 8:
             target.pop(key, None)
+            if feed == "R" and not any(parent == order_id for parent, _ in self.routes):
+                parent_record = self.orders.get(order_id)
+                if (
+                    parent_record is not None
+                    and parent_record.acknowledged_at is not None
+                ):
+                    parent_record.acknowledged_at = self.now()
             self.notice(f"{feed} {key} 구독에서 삭제됨")
             return
         now = self.now()
@@ -174,6 +205,17 @@ class DeskBook:
         prior_fill = num(record.fields.get("EMSX_FILLED"))
         record.fields.update({k: v for k, v in fields.items() if v is not None})
         record.last_seen = now
+        state = text(record.fields.get("EMSX_STATUS")).strip().upper()
+        if feed == "O":
+            if state in PENDING and record.acknowledged_at is None:
+                record.acknowledged_at = now
+            elif state not in PENDING:
+                record.acknowledged_at = None
+        elif state in ACTIVE_ROUTES:
+            if record.active_since is None:
+                record.active_since = now
+        else:
+            record.active_since = None
         if "EMSX_FILLED" in fields and num(fields["EMSX_FILLED"]) != prior_fill:
             record.last_fill_change = now
             if status != 4:
@@ -213,38 +255,29 @@ class DeskBook:
                 and status not in TERMINAL
             ):
                 if status == "ORD-PEND":
-                    warning.append("E2E ACK 대기")
+                    warning.append("Ack Pending")
                 if (
                     not route_records
                     and status in PENDING
-                    and now - rec.first_seen >= unrouted_minutes * 60
+                    and rec.acknowledged_at is not None
+                    and now - rec.acknowledged_at >= unrouted_minutes * 60
                 ):
-                    warning.append("Route 미지정(관측 기준)")
+                    warning.append("Unrouted Warning")
                 active_routes = [
-                    x
-                    for x in route_records
-                    if text(x.fields.get("EMSX_STATUS")).upper()
-                    in (
-                        "SENT",
-                        "WORKING",
-                        "PARTFILL",
-                        "PARTFILLED",
-                        "PART-FILLED",
-                        "ASSIGN",
-                        "ASSIGNED",
-                        "HOLD",
-                        "CXLREQ",
-                        "REPPEN",
-                        "REPLACE-PEND",
-                    )
+                    route for route in route_records if route.active_since is not None
                 ]
                 if (
                     active_routes
-                    and 0 < remain
-                    and now - max(x.last_fill_change for x in active_routes)
+                    and remain > 0
+                    and known_zero(f.get("EMSX_FILLED"))
+                    and all(
+                        known_zero(route.fields.get("EMSX_FILLED"))
+                        for route in route_records
+                    )
+                    and now - min(route.active_since for route in active_routes)
                     >= nofill_minutes * 60
                 ):
-                    warning.append("미체결 정체(관측 기준)")
+                    warning.append("No-Fill Alert")
                 if (
                     route_records
                     and not active_routes
@@ -252,7 +285,7 @@ class DeskBook:
                     and now - max(x.last_seen for x in route_records)
                     >= unrouted_minutes * 60
                 ):
-                    warning.append("Route 종료 후 잔량 점검")
+                    warning.append("Route Closed Alert")
             rows.append(
                 {
                     "seq": seq,
@@ -265,19 +298,20 @@ class DeskBook:
                     "fill_pct": safe_pct(filled, qty),
                     "status": status,
                     "line_status": line_status(f.get("EMSX_STATUS")),
-                    "instruction": text(f.get("EMSX_HAND_INSTRUCTION")),
+                    "instruction": client_instruction(f),
+                    "basket_name": text(f.get("EMSX_BASKET_NAME")),
+                    **creation_fields(f),
                     "brokers": ",".join(broker_codes),
                     "routes": len(route_records),
                     "warning": " / ".join(warning),
+                    "alert_types": tuple(x for x in warning if x != "Ack Pending"),
                     "observed_mins": round((now - rec.first_seen) / 60, 1),
                     "snapshot": rec.from_snapshot,
                     "avg_price": text(f.get("EMSX_AVG_PRICE")),
                     "trader": text(f.get("EMSX_TRADER")),
                 }
             )
-        return sorted(
-            rows, key=lambda x: (not bool(x["warning"]), x["account"], x["seq"])
-        )
+        return sort_orders(rows)
 
     @synchronized
     def route_view(self) -> list[dict[str, Any]]:
@@ -301,7 +335,9 @@ class DeskBook:
                     "remain": max(0, qty - filled),
                     "status": text(f.get("EMSX_STATUS")),
                     "line_status": line_status(f.get("EMSX_STATUS")),
-                    "instruction": text(pf.get("EMSX_HAND_INSTRUCTION")),
+                    "instruction": client_instruction(pf),
+                    "basket_name": text(pf.get("EMSX_BASKET_NAME")),
+                    **creation_fields(pf),
                     "avg_price": text(f.get("EMSX_AVG_PRICE")),
                     "parent_missing": parent is None,
                     "parent_visible": "NO" if parent is None else "YES",
@@ -310,9 +346,11 @@ class DeskBook:
         return sorted(rows, key=lambda x: (x["broker"], x["seq"], x["route_id"]))
 
     @synchronized
-    def broker_summary(self) -> list[dict[str, Any]]:
+    def broker_summary(
+        self, routes: list[dict[str, Any]] | None = None
+    ) -> list[dict[str, Any]]:
         brokers = {}
-        for r in self.route_view():
+        for r in self.route_view() if routes is None else routes:
             broker = r["broker"] or "(UNKNOWN)"
             x = brokers.setdefault(
                 broker,
@@ -334,11 +372,23 @@ class DeskBook:
         ]
 
     @synchronized
-    def counters(self) -> dict[str, Any]:
-        orders = self.full_view()
+    def stream_healthy(self) -> bool:
+        """표 재계산 없이 구독 상태와 순번 연속성을 확인한다."""
+        return (
+            all(self.snapshot_done.values())
+            and all(state == "STARTED" for state in self.subscriptions.values())
+            and not self.stream_error
+            and not self.event_gaps
+        )
+
+    @synchronized
+    def counters(
+        self, orders: list[dict[str, Any]] | None = None, route_count: int | None = None
+    ) -> dict[str, Any]:
+        orders = self.full_view() if orders is None else orders
         return {
             "orders": len(orders),
-            "routes": len(self.routes),
+            "routes": len(self.routes) if route_count is None else route_count,
             "alerts": sum(bool(r["warning"]) for r in orders),
             "filled_orders": sum(
                 r["status"] in ("FILLED", "COMPLETED")
@@ -348,8 +398,5 @@ class DeskBook:
             "unrouted": sum(
                 r["routes"] == 0 and r["status"] not in TERMINAL for r in orders
             ),
-            "stream_ok": all(self.snapshot_done.values())
-            and all(x == "STARTED" for x in self.subscriptions.values())
-            and not self.stream_error
-            and not self.event_gaps,
+            "stream_ok": self.stream_healthy(),
         }

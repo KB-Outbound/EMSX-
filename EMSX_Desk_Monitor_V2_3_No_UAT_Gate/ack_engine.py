@@ -191,6 +191,7 @@ class AckEngine:
         notify: Callable[..., None],
         send_func: Callable[[int, int], None],
         audit_path: Path | None = None,
+        date_guard: Callable[[dict[str, Any]], bool] | None = None,
     ) -> None:
         self._lock = threading.RLock()
         self.env = environment
@@ -200,6 +201,7 @@ class AckEngine:
         self.notify = notify
         self.send_func = send_func
         self.audit_path = Path(audit_path) if audit_path else None
+        self.date_guard = date_guard
         self.armed = False
         self.orders = {}
         self.seen = set()
@@ -327,6 +329,8 @@ class AckEngine:
         order = self.orders.setdefault(seq, {"EMSX_SEQUENCE": seq})
         order.update({k: v for k, v in fields.items() if v is not None})
         ok, reason = eligibility(order, self.config)
+        if self.date_guard is not None and not self.date_guard(order):
+            ok, reason = False, "TRADE_DATE_OUT_OF_RANGE"
         # 필수 필드가 갖춰진 신규 이벤트만 자동 승인한다.
         # 후속 부분 갱신과 초기 스냅샷은 자동 승인하지 않는다.
         new_is_eligible = (
@@ -380,6 +384,8 @@ class AckEngine:
             self.publish(seq, "BLOCKED", "Not armed/ready")
             return
         valid, reason = eligibility(self.orders[seq], self.config)
+        if self.date_guard is not None and not self.date_guard(self.orders[seq]):
+            valid, reason = False, "TRADE_DATE_OUT_OF_RANGE"
         if not valid:
             self.publish(seq, "BLOCKED", reason)
             return

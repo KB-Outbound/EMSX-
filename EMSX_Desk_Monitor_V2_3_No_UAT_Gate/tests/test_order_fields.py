@@ -15,7 +15,7 @@ class TestOrderFields(unittest.TestCase):
             {
                 "EMSX_SEQUENCE": 1,
                 "EMSX_STATUS": "ASSIGN",
-                "EMSX_HAND_INSTRUCTION": "ANY",
+                "EMSX_NOTES": "TWAP",
                 "EMSX_AMOUNT": 100,
             },
         )
@@ -28,11 +28,11 @@ class TestOrderFields(unittest.TestCase):
         row = book.full_view()[0]
         self.assertEqual(row["seq"], 1)
         self.assertEqual(row["line_status"], "Part-filled")
-        self.assertEqual(row["instruction"], "ANY")
-        self.assertEqual(book.route_view()[0]["instruction"], "ANY")
-        book.ingest("O", 7, {"EMSX_SEQUENCE": 1, "EMSX_HAND_INSTRUCTION": ""})
+        self.assertEqual(row["instruction"], "TWAP")
+        self.assertEqual(book.route_view()[0]["instruction"], "TWAP")
+        book.ingest("O", 7, {"EMSX_SEQUENCE": 1, "EMSX_NOTES": ""})
         self.assertEqual(book.full_view()[0]["instruction"], "")
-        self.assertIn("EMSX_HAND_INSTRUCTION", ORDER_FIELDS)
+        self.assertIn("EMSX_NOTES", ORDER_FIELDS)
 
     def test_assign_cancel_and_part_filled_monitoring(self) -> None:
         clock = [0.0]
@@ -43,7 +43,7 @@ class TestOrderFields(unittest.TestCase):
             "O", 6, {"EMSX_SEQUENCE": 1, "EMSX_STATUS": "ASSIGN", "EMSX_AMOUNT": 100}
         )
         clock[0] = 301
-        self.assertIn("Route 미지정", book.full_view()[0]["warning"])
+        self.assertIn("Unrouted Warning", book.full_view()[0]["warning"])
         book.ingest(
             "R",
             6,
@@ -55,7 +55,7 @@ class TestOrderFields(unittest.TestCase):
             },
         )
         clock[0] += 901
-        self.assertIn("미체결 정체", book.full_view()[0]["warning"])
+        self.assertNotIn("No-Fill Alert", book.full_view()[0]["warning"])
         book.ingest("O", 7, {"EMSX_SEQUENCE": 1, "EMSX_STATUS": "CANCEL"})
         self.assertEqual(book.full_view()[0]["line_status"], "Cancel")
         self.assertFalse(book.full_view()[0]["warning"])

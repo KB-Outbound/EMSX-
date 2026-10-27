@@ -13,6 +13,7 @@ import random
 import time
 from pathlib import Path
 from ack_engine import AckEngine, AckLedger
+from order_fields import recent_order
 
 ORDER_FIELDS = [
     "API_SEQ_NUM",
@@ -26,7 +27,9 @@ ORDER_FIELDS = [
     "EMSX_TICKER",
     "EMSX_STATUS",
     "EMSX_ORDER_TYPE",
-    "EMSX_HAND_INSTRUCTION",
+    "EMSX_NOTES",
+    "EMSX_BASKET_NAME",
+    "EMSX_TIME",
     "EMSX_TIF",
     "EMSX_TRADER",
     "EMSX_DATE",
@@ -52,6 +55,7 @@ INT_FIELDS = {
     "EMSX_FILLED",
     "EMSX_WORKING",
     "EMSX_DATE",
+    "EMSX_TIME",
     "EMSX_ROUTE_CREATE_DATE",
     "EMSX_ROUTE_CREATE_TIME",
 }
@@ -297,6 +301,7 @@ class BloombergWorker(threading.Thread):
             self._notify,
             self._send,
             Path(self.ledger_path).with_name("ack_audit.jsonl"),
+            date_guard=recent_order,
         )
         order_subs = A.SubscriptionList()
         order_subs.add(

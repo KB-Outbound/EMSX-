@@ -1,6 +1,7 @@
 """KB증권 EMSX 모니터 화면과 안전한 작업자 수명 주기를 관리한다."""
 
 from __future__ import annotations
+import argparse
 import csv
 import os
 from datetime import datetime
@@ -13,6 +14,8 @@ from tkinter import ttk, filedialog, messagebox
 from bloomberg_feed import BloombergWorker
 from demo_feed import DemoWorker
 from desk_core import DeskBook, line_status
+from order_fields import recent_order, sort_orders, client_instruction, creation_fields
+from alerting import AlertTracker, play_alarm
 from ack_engine import load_config, eligibility, write_authorized
 
 from ui_text import APP_TITLE, DESK_TITLE, localize
@@ -25,14 +28,14 @@ from kb_theme import (
     row_tags,
 )
 
-VERSION = "2.4.3"
+VERSION = "2.5.0"
 APP_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "EMSX_Desk_Monitor_HDGB"
 ADMIN_CONFIG = APP_DIR / "admin_config.json"
 LEDGER_PATH = APP_DIR / "ack_journal.sqlite3"
 
 
 class MonitorApp:
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(self, root: tk.Tk, environment: str = "PROD") -> None:
         self.root = root
         self.root.title(APP_TITLE)
         self.root.geometry("1330x790")
@@ -46,18 +49,28 @@ class MonitorApp:
         self.arm_state = tk.StringVar(value="자동 수신확인 해제 · 전송 없음")
         self.arm_blocker = tk.StringVar(value="활성화 불가: 모니터링을 시작하십시오")
         self.worker = None
-        self.env = tk.StringVar(value="DEMO")
-        self.environment_header = tk.StringVar(value=f"DEMO | {DESK_TITLE}")
+        self.monitoring = False
+        self.env = tk.StringVar(value=environment)
+        self.environment_header = tk.StringVar(value=f"{environment} | {DESK_TITLE}")
         self.team = tk.StringVar(value=self.admin_config["team_name"])
         self.search = tk.StringVar()
         self.account_filter = tk.StringVar()
         self.broker_filter = tk.StringVar()
         self.only_alerts = tk.BooleanVar(value=False)
+        self.basket_filter = tk.StringVar()
+        self.date_filter = tk.StringVar(value="오늘·전일")
+        self.order_sort = tk.StringVar(value="최신순")
+        self.sound_enabled = tk.BooleanVar(value=True)
+        self.alert_tracker = AlertTracker()
+        self.eligible_ids: set[int] = set()
+        self.alert_summary = tk.StringVar(value="Alerts 0")
         self.unrouted_min = tk.StringVar(value="5")
         self.nofill_min = tk.StringVar(value="15")
         self.status = tk.StringVar(value="모니터링 중지 / 자동 수신확인 해제")
         self.feed_state = tk.StringVar(value="Order: -  |  Route: -  |  초기 수신: -")
-        self.counts = tk.StringVar(value="Order 0  |  Route 0  |  미배정 0  |  경고 0")
+        self.counts = tk.StringVar(
+            value="Order 0  |  Route 0  |  Unrouted 0  |  Alerts 0"
+        )
         self.tabs = {}
         self._make_ui()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
@@ -99,6 +112,10 @@ class MonitorApp:
             box, textvariable=self.status, style="Badge.TLabel"
         )
         self.status_badge.pack(anchor="w", pady=(4, 2))
+        self.alert_badge = ttk.Label(
+            box, textvariable=self.alert_summary, style="Badge.TLabel"
+        )
+        self.alert_badge.pack(anchor="w", pady=(0, 2))
         ttk.Label(box, textvariable=self.feed_state, style="Muted.TLabel").pack(
             anchor="w", pady=(2, 0)
         )
@@ -119,23 +136,55 @@ class MonitorApp:
             side="left", padx=5
         )
         ttk.Checkbutton(
-            filt, text="경고만 표시 (Order)", variable=self.only_alerts
+            filt, text="Alerts만 표시 (Order)", variable=self.only_alerts
         ).pack(side="left", padx=12)
+        scope = ttk.Frame(box)
+        scope.pack(fill="x", pady=(0, 8))
+        ttk.Label(scope, text="Create Time (Trade Date)").pack(side="left")
+        ttk.Combobox(
+            scope,
+            textvariable=self.date_filter,
+            values=["오늘·전일", "오늘"],
+            width=10,
+            state="readonly",
+        ).pack(side="left", padx=6)
+        ttk.Label(scope, text="Basket Name 검색").pack(side="left", padx=(12, 0))
+        ttk.Entry(scope, textvariable=self.basket_filter, width=22).pack(
+            side="left", padx=6
+        )
+        ttk.Label(scope, text="정렬").pack(side="left", padx=(12, 0))
+        ttk.Combobox(
+            scope,
+            textvariable=self.order_sort,
+            values=["최신순", "과거순", "Basket별 최신순"],
+            width=17,
+            state="readonly",
+        ).pack(side="left", padx=6)
+        ttk.Checkbutton(scope, text="알림음", variable=self.sound_enabled).pack(
+            side="left", padx=8
+        )
+        ttk.Button(scope, text="알림음 확인", command=self._test_alarm).pack(
+            side="right"
+        )
         x = ttk.Frame(box)
         x.pack(fill="x", pady=(0, 6))
-        ttk.Label(x, text="Route 미지정 기준 (분)").pack(side="left")
+        ttk.Label(x, text="Route 지연 기준 (분)").pack(side="left")
         ttk.Entry(x, textvariable=self.unrouted_min, width=5).pack(side="left", padx=5)
-        ttk.Label(x, text="미체결 정체 기준 (분)").pack(side="left", padx=(15, 0))
+        ttk.Label(x, text="미체결 정체 기준 (Route 후 No Fill)").pack(
+            side="left", padx=(15, 0)
+        )
         ttk.Entry(x, textvariable=self.nofill_min, width=5).pack(side="left", padx=5)
         ttk.Label(
             x,
-            text="※ 경고 기준 시간: 모니터링 개시 시점부터 누적된 관측 시간 기준",
+            text="※ Alert 시간: Ack 상태·활성 Route 최초 관측 기준 (분)",
             foreground=GOLD,
         ).pack(side="left", padx=16)
         nb = ttk.Notebook(box)
         nb.pack(fill="both", expand=True)
         spec = {
             "Orders": [
+                ("create_time", "Create Time", 165),
+                ("basket_name", "Basket Name", 140),
                 ("account", "Account", 148),
                 ("ticker", "Ticker", 152),
                 ("side", "Side", 60),
@@ -147,10 +196,12 @@ class MonitorApp:
                 ("instruction", "Instruction", 150),
                 ("brokers", "Brokers", 105),
                 ("routes", "Routes", 55),
-                ("warning", "점검 사항", 240),
+                ("warning", "Alerts", 240),
             ],
             "Routes": [
                 ("route_id", "Route#", 66),
+                ("create_time", "Create Time", 165),
+                ("basket_name", "Basket Name", 140),
                 ("account", "Account", 145),
                 ("ticker", "Ticker", 135),
                 ("broker", "Broker", 80),
@@ -227,7 +278,7 @@ class MonitorApp:
         )
         self.arm_btn = ttk.Button(
             h2,
-            text="자동 수신확인(Ack) 활성화",
+            text="자동 Ack",
             command=self.arm_ack,
             state="disabled",
             style="Primary.TButton",
@@ -250,6 +301,8 @@ class MonitorApp:
             side="right"
         )
         acols = [
+            ("create_time", "Create Time", 165),
+            ("basket_name", "Basket Name", 140),
             ("account", "Account", 165),
             ("ticker", "Ticker", 172),
             ("side", "Side", 75),
@@ -342,6 +395,7 @@ class MonitorApp:
         self.messages = queue.Queue(maxsize=10000)
         self.commands = queue.Queue()
         self.ack_states = {}
+        self.alert_tracker = AlertTracker()
         self.armed = False
         self.arm_state.set("자동 수신확인 해제 · 전송 없음")
         try:
@@ -365,15 +419,18 @@ class MonitorApp:
         self.team_ctrl.configure(state="disabled")
         self.status.set("연결 중 / 자동 수신확인 해제")
         self._append(f"{env} 모니터링 시작 / 구독 팀={team} / 자동 수신확인 해제")
+        self.monitoring = True
         self.worker.start()
 
     def stop(self) -> None:
+        self.monitoring = False
         self.disarm_ack()
         if self.worker:
             self.worker.stop()
         self.status.set("모니터링 종료 중 / 자동 수신확인 해제")
 
     def close(self) -> None:
+        self.monitoring = False
         self.disarm_ack()
         if self.worker:
             self.worker.stop()
@@ -445,7 +502,7 @@ class MonitorApp:
             return
         if not messagebox.askyesno(
             "자동 수신확인 전송 확인",
-            f"신규 E2E ORD-PEND Order에 실제 SellSideAck 요청을 전송하시겠습니까?\n\n실행 환경: {self.env.get()}\n구독 팀: {self.team.get()}\nAccount 범위: 값이 있는 모든 Account\n최대 Shares: {self.admin_config['max_shares']}\n\n기존 Order는 처리하지 않습니다. 승인된 전송자 한 대만 실행하십시오.\n실제 Order 상태가 변경됩니다.",
+            f"신규 E2E ORD-PEND Order에 실제 SellSideAck 요청을 전송하시겠습니까?\n\n실행 환경: {self.env.get()}\n구독 팀: {self.team.get()}\nAccount 범위: 값이 있는 모든 Account\n생성일 범위: 서울 기준 오늘·전일 (화면 필터와 별도)\n최대 Shares: {self.admin_config['max_shares']}\n\n기존 Order는 처리하지 않습니다. 승인된 전송자 한 대만 실행하십시오.\n실제 Order 상태가 변경됩니다.",
         ):
             return
         self.commands.put({"action": "arm", "armed": True})
@@ -470,6 +527,7 @@ class MonitorApp:
                 typ = m["type"]
                 if typ == "reset":
                     self.book = DeskBook()
+                    self.alert_tracker = AlertTracker()
                     self.armed = False
                     self.arm_state.set("재연결 / 자동 Ack 해제")
                 elif typ == "data":
@@ -524,6 +582,7 @@ class MonitorApp:
                     self.armed = False
                     self._append("오류: " + m["message"])
                 elif typ == "ended":
+                    self.monitoring = False
                     self.start_btn.configure(state="normal")
                     self.stop_btn.configure(state="disabled")
                     self.env_ctrl.configure(state="readonly")
@@ -537,6 +596,40 @@ class MonitorApp:
         finally:
             self.root.after(10 if not self.messages.empty() else 50, self._pump)
 
+    def _update_alarms(self, rows: list[dict]) -> None:
+        """검색 필터와 무관하게 날짜 범위 내 경고를 집계하고 알림을 반복한다."""
+        unrouted = sum("Unrouted Warning" in row["alert_types"] for row in rows)
+        nofill = sum("No-Fill Alert" in row["alert_types"] for row in rows)
+        total = sum(bool(row["alert_types"]) for row in rows)
+        self.alert_summary.set(
+            f"Unrouted Warning {unrouted} | No-Fill Alert {nofill} | Alerts {total}"
+        )
+        self.alert_badge.configure(
+            style=(
+                "Danger.Badge.TLabel"
+                if total and int(time.monotonic()) % 2 == 0
+                else "Badge.TLabel"
+            )
+        )
+        audio_ready = (
+            self.sound_enabled.get()
+            and self.monitoring
+            and self.worker is not None
+            and self.worker.is_alive()
+            and self.book.stream_healthy()
+        )
+        if self.alert_tracker.update(rows, audio_ready):
+            self._test_alarm()
+
+    def _test_alarm(self) -> None:
+        """음향 장치가 차단되어도 시각 경고는 계속 유지한다."""
+        try:
+            play_alarm(self.root.bell)
+        except Exception as exc:
+            self._append(f"알림음 재생 실패: {exc}")
+        else:
+            self._append("알림음 재생 요청 · 시스템 음량과 음소거 설정을 확인하십시오")
+
     def _render(self) -> None:
         self.environment_header.set(f"{self.env.get()} | {DESK_TITLE}")
         self.status_badge.configure(
@@ -547,10 +640,36 @@ class MonitorApp:
             )
         )
         a, b = self._thresholds()
-        rows = self.book.full_view(a, b)
-        stats = self.book.counters()
+        all_rows = self.book.full_view(a, b)
+        rows = [
+            row
+            for row in all_rows
+            if recent_order(
+                {"EMSX_DATE": row["trade_date"]},
+                today_only=self.date_filter.get() == "오늘",
+            )
+        ]
+        rows = sort_orders(
+            rows,
+            basket_first=self.order_sort.get() == "Basket별 최신순",
+            oldest_first=self.order_sort.get() == "과거순",
+        )
+        self.eligible_ids = {row["seq"] for row in rows}
+        routes = [
+            row for row in self.book.route_view() if row["seq"] in self.eligible_ids
+        ]
+        routes = sorted(
+            routes,
+            key=lambda row: (row["create_sort"], row["seq"], row["route_id"]),
+            reverse=self.order_sort.get() != "과거순",
+        )
+        if self.order_sort.get() == "Basket별 최신순":
+            routes.sort(key=lambda row: row["basket_name"].casefold())
+        stats = self.book.counters(rows, len(routes))
+        self._update_alarms(rows)
+        missing_dates = sum(not row["trade_date"] for row in all_rows)
         self.counts.set(
-            f"Order {stats['orders']:,}  |  Route {stats['routes']:,}  |  미배정 {stats['unrouted']:,}  |  경고 {sum(bool(r['warning']) for r in rows):,}"
+            f"Order {stats['orders']:,}  |  Route {stats['routes']:,}  |  Unrouted {stats['unrouted']:,}  |  Alerts {sum(bool(r['alert_types']) for r in rows):,}  |  Date Missing {missing_dates:,}"
         )
         p = self.book
 
@@ -565,7 +684,12 @@ class MonitorApp:
         self.feed_state.set(
             "Order: " + label("O") + "  |  Route: " + label("R") + warning
         )
-        if stats["stream_ok"] and self.worker and self.worker.is_alive():
+        if (
+            stats["stream_ok"]
+            and self.monitoring
+            and self.worker
+            and self.worker.is_alive()
+        ):
             self.status.set(
                 "실시간 모니터링 / "
                 + ("자동 수신확인 활성화" if self.armed else "자동 수신확인 해제")
@@ -576,17 +700,22 @@ class MonitorApp:
         q = self.search.get().strip().upper()
         account = self.account_filter.get().strip().upper()
         broker = self.broker_filter.get().strip().upper()
+        basket = self.basket_filter.get().strip().casefold()
         items = {
             "Orders": rows,
-            "Routes": self.book.route_view(),
-            "Brokers": self.book.broker_summary(),
+            "Routes": routes,
+            "Brokers": self.book.broker_summary(
+                [row for row in routes if basket in row["basket_name"].casefold()]
+            ),
         }
         for name, data in items.items():
             tree = self.tabs[name]["tree"]
             cols = self.tabs[name]["columns"]
             visible = []
             for x in data:
-                if name == "Orders" and self.only_alerts.get() and not x["warning"]:
+                if name != "Brokers" and basket not in x["basket_name"].casefold():
+                    continue
+                if name == "Orders" and self.only_alerts.get() and not x["alert_types"]:
                     continue
                 if (
                     account
@@ -638,6 +767,7 @@ class MonitorApp:
         self._visible = items
         healthy = (
             stats["stream_ok"]
+            and self.monitoring
             and self.worker
             and self.worker.is_alive()
             and self.env.get() != "DEMO"
@@ -662,7 +792,14 @@ class MonitorApp:
     def _render_acks(self) -> None:
         pending = []
         for seq, rec in self.book.orders.items():
+            if seq not in self.eligible_ids:
+                continue
             f = rec.fields
+            if (
+                self.basket_filter.get().strip().casefold()
+                not in str(f.get("EMSX_BASKET_NAME") or "").casefold()
+            ):
+                continue
             if str(f.get("EMSX_STATUS", "")).upper() != "ORD-PEND":
                 continue
             permitted, reason = eligibility(
@@ -683,20 +820,32 @@ class MonitorApp:
                     str(f.get("EMSX_SIDE") or ""),
                     str(f.get("EMSX_AMOUNT") or ""),
                     line_status(f.get("EMSX_STATUS")),
-                    str(f.get("EMSX_HAND_INSTRUCTION") or ""),
+                    client_instruction(f),
                     localize(state),
                     localize(detail),
+                    creation_fields(f)["create_time"],
+                    str(f.get("EMSX_BASKET_NAME") or ""),
                 )
             )
+        pending.sort(
+            key=lambda row: (row[-2], row[0]), reverse=self.order_sort.get() != "과거순"
+        )
+        if self.order_sort.get() == "Basket별 최신순":
+            pending.sort(key=lambda row: row[-1].casefold())
         previous = set(self.ack_tree.get_children())
         for index, row in enumerate(pending):
             iid = str(row[0])
             tags = row_tags(index, row[5])
             if iid in previous:
-                self.ack_tree.item(iid, values=row[1:], tags=tags)
+                self.ack_tree.item(
+                    iid, values=(row[-2], row[-1], *row[1:-2]), tags=tags
+                )
                 previous.remove(iid)
+                self.ack_tree.move(iid, "", index)
             else:
-                self.ack_tree.insert("", "end", iid=iid, values=row[1:], tags=tags)
+                self.ack_tree.insert(
+                    "", "end", iid=iid, values=(row[-2], row[-1], *row[1:-2]), tags=tags
+                )
         for obsolete in previous:
             self.ack_tree.delete(obsolete)
 
@@ -737,9 +886,15 @@ class MonitorApp:
             messagebox.showerror("CSV 저장 오류", str(exc))
 
 
-def main():
+def main() -> None:
+    parser = argparse.ArgumentParser(description="KB증권 EMSX 모니터", add_help=False)
+    parser.add_argument("-h", "--help", action="help", help="도움말을 표시합니다")
+    parser.add_argument(
+        "--demo", action="store_true", help="외부 연결 없는 모의 환경을 선택합니다"
+    )
+    args = parser.parse_args()
     root = tk.Tk()
-    MonitorApp(root)
+    MonitorApp(root, environment="DEMO" if args.demo else "PROD")
     root.mainloop()
 
 
