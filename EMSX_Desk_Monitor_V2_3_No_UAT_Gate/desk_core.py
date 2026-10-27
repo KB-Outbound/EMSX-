@@ -10,6 +10,8 @@ from typing import Any, Callable
 import time
 import threading
 from synchronization import synchronized
+from diagnostics import LOGGER
+from feed_parsing import integer
 from order_fields import client_instruction, creation_fields, sort_orders
 
 TERMINAL = {
@@ -128,12 +130,15 @@ class DeskBook:
     ) -> None:
         if feed not in ("O", "R"):
             return
+        if not isinstance(fields, dict):
+            LOGGER.warning("장부 입력 형식 오류: 함수=ingest 구독=%s", feed)
+            return
         # 이벤트 필터 전에 하트비트의 순번도 검사한다.
         # 초기 수신 종료 이벤트의 순번도 누락하지 않는다.
         api_seq = fields.get("API_SEQ_NUM")
         if api_seq is not None:
             try:
-                sequence = int(api_seq)
+                sequence = integer(api_seq)
                 last = self.seq_last[feed]
                 if last is not None and sequence > last + 1:
                     self.event_gaps.append(
@@ -154,8 +159,8 @@ class DeskBook:
                 self.seq_last[feed] = (
                     max(last, sequence) if last is not None else sequence
                 )
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError, OverflowError):
+                LOGGER.warning("장부 순번 파싱 실패: 구독=%s", feed, exc_info=True)
         self.event_gaps = self.event_gaps[-300:]
         if status == 11:
             self.snapshot_done[feed] = True
@@ -169,14 +174,16 @@ class DeskBook:
         if seq is None:
             return
         try:
-            order_id = int(seq)
-        except (ValueError, TypeError):
+            order_id = integer(seq)
+        except (ValueError, TypeError, OverflowError):
+            LOGGER.warning("장부 주문 식별자 파싱 실패", exc_info=True)
             return
         key = order_id
         if feed == "R":
             try:
-                rid = int(fields["EMSX_ROUTE_ID"])
-            except (KeyError, TypeError, ValueError):
+                rid = integer(fields["EMSX_ROUTE_ID"])
+            except (KeyError, TypeError, ValueError, OverflowError):
+                LOGGER.warning("장부 Route 식별자 파싱 실패", exc_info=True)
                 return
             # 동일 라우트의 체결 갱신은 별도 라우트로 집계하지 않는다.
             key = (order_id, rid)
@@ -224,6 +231,14 @@ class DeskBook:
                     f"{prior_fill} -> {num(fields['EMSX_FILLED'])}"
                 )
         self.updated = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    @synchronized
+    def clear_optional_field(self, field_name: str) -> None:
+        """선택 구독 종료 시 마지막 수신 값을 현재 값처럼 표시하지 않는다."""
+        if field_name not in {"EMSX_NOTES", "EMSX_BASKET_NAME", "EMSX_TIME"}:
+            return
+        for record in self.orders.values():
+            record.fields.pop(field_name, None)
 
     @synchronized
     def full_view(

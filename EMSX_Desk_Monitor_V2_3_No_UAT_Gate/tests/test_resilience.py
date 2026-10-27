@@ -345,7 +345,7 @@ class TestSessionIntegration(unittest.TestCase):
                 worker._run_session(api)
                 self.assertTrue(worker.feed_error)
                 self.assertFalse(worker.engine.armed)
-                self.assertEqual(len(subscriptions), 2)
+                self.assertEqual(len(subscriptions), 5)
                 book = DeskBook()
                 while not output.empty():
                     item = output.get_nowait()

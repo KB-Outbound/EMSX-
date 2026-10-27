@@ -28,7 +28,7 @@ from kb_theme import (
     row_tags,
 )
 
-VERSION = "2.5.0"
+VERSION = "2.5.1"
 APP_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "EMSX_Desk_Monitor_HDGB"
 ADMIN_CONFIG = APP_DIR / "admin_config.json"
 LEDGER_PATH = APP_DIR / "ack_journal.sqlite3"
@@ -67,6 +67,8 @@ class MonitorApp:
         self.unrouted_min = tk.StringVar(value="5")
         self.nofill_min = tk.StringVar(value="15")
         self.status = tk.StringVar(value="모니터링 중지 / 자동 수신확인 해제")
+        self.feed_warning = tk.StringVar()
+        self.unavailable_fields: set[str] = set()
         self.feed_state = tk.StringVar(value="Order: -  |  Route: -  |  초기 수신: -")
         self.counts = tk.StringVar(
             value="Order 0  |  Route 0  |  Unrouted 0  |  Alerts 0"
@@ -118,6 +120,9 @@ class MonitorApp:
         self.alert_badge.pack(anchor="w", pady=(0, 2))
         ttk.Label(box, textvariable=self.feed_state, style="Muted.TLabel").pack(
             anchor="w", pady=(2, 0)
+        )
+        ttk.Label(box, textvariable=self.feed_warning, style="Muted.TLabel").pack(
+            anchor="w"
         )
         ttk.Separator(box).pack(fill="x", pady=8)
         ttk.Label(box, textvariable=self.counts, style="Metric.TLabel").pack(
@@ -446,7 +451,7 @@ class MonitorApp:
     def show_config(self) -> None:
         messagebox.showinfo(
             "설정 파일 위치",
-            f"관리자 설정 파일:\n{ADMIN_CONFIG}\n\n기본값은 전송 차단입니다.\n검증과 전송 권한 확인 후 관리자가 BETA/PROD 전송을 허용해야 합니다.",
+            f"관리자 설정 파일:\n{ADMIN_CONFIG}\n진단 로그:\n{APP_DIR / 'feed_diagnostics.log'}\n\n기본값은 전송 차단입니다.\n검증과 전송 권한 확인 후 관리자가 BETA/PROD 전송을 허용해야 합니다.",
         )
 
     def _arm_blockers(self) -> list[str]:
@@ -528,6 +533,8 @@ class MonitorApp:
                 if typ == "reset":
                     self.book = DeskBook()
                     self.alert_tracker = AlertTracker()
+                    self.feed_warning.set("")
+                    self.unavailable_fields.clear()
                     self.armed = False
                     self.arm_state.set("재연결 / 자동 Ack 해제")
                 elif typ == "data":
@@ -576,6 +583,17 @@ class MonitorApp:
                 elif typ == "connected":
                     self._append(localize(m["message"]))
                     self.status.set("연결됨 / 초기 데이터 수신 중 / 자동 수신확인 해제")
+                elif typ == "warning":
+                    self._append("수신 경고: " + m["message"])
+                elif typ == "diagnostics":
+                    self._append("진단 로그 파일: " + m["path"])
+                elif typ == "optional_unavailable":
+                    self.unavailable_fields.add(m["field"])
+                    self.book.clear_optional_field(m["field"])
+                    self.feed_warning.set(
+                        "선택 필드 미제공: "
+                        + ", ".join(sorted(self.unavailable_fields))
+                    )
                 elif typ == "error":
                     self.book.stream_error = m["message"]
                     self.status.set("데이터 수신 오류 / 자동 수신확인 해제")

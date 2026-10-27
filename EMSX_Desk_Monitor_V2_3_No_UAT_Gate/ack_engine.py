@@ -12,6 +12,8 @@ import time
 import os
 from decimal import Decimal, InvalidOperation
 from synchronization import synchronized
+from diagnostics import LOGGER
+from feed_parsing import integer
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -294,6 +296,22 @@ class AckEngine:
         )
 
     @synchronized
+    def block_order(self, sequence: Any, reason: str) -> None:
+        """단일 불완전 메시지는 해당 주문만 조회 대상으로 유지하고 전체 활성화는 유지한다."""
+        try:
+            seq = integer(sequence)
+            if seq < 1:
+                return
+        except (ValueError, TypeError, OverflowError):
+            return
+        if seq not in self.seen and len(self.seen) >= self.max_tracked_orders:
+            self.disarm("주문 추적 한도 초과: 수동 재동기화 필요")
+            return
+        self.seen.add(seq)
+        self.new_while_armed.discard(seq)
+        LOGGER.warning("개별 주문 자동 Ack 제외: 주문=%s 사유=%s", seq, reason)
+
+    @synchronized
     def on_order(
         self,
         event_status: int,
@@ -303,11 +321,14 @@ class AckEngine:
     ) -> None:
         if self.closed:
             return
+        if not isinstance(fields, dict):
+            LOGGER.warning("Ack 주문 입력 형식 오류: 함수=on_order")
+            return
         if not stream_ok or not snapshot_done:
             self.set_ready(False)
         if event_status == 8:
             try:
-                seq = int(fields.get("EMSX_SEQUENCE"))
+                seq = integer(fields.get("EMSX_SEQUENCE"))
             except (ValueError, TypeError, OverflowError):
                 return
             self.orders.pop(seq, None)
@@ -316,8 +337,9 @@ class AckEngine:
         if event_status not in (4, 6, 7):
             return
         try:
-            seq = int(fields["EMSX_SEQUENCE"])
+            seq = integer(fields["EMSX_SEQUENCE"])
         except (KeyError, ValueError, TypeError, OverflowError):
+            LOGGER.warning("Ack 주문 식별자 파싱 실패: 함수=on_order", exc_info=True)
             return
         if seq < 1:
             return
