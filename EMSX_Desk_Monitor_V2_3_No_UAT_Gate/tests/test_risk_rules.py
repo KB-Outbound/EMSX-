@@ -187,8 +187,7 @@ class TestRiskRules(unittest.TestCase):
         self.assertEqual(samples[0], 0)
         self.assertEqual(samples[-1], 0)
         self.assertIn(
-            '--add-data "assets/desk_alert.wav;assets"',
-            (root / "build_windows.bat").read_text(encoding="utf-8"),
+            "desk_alert.wav", (root / "EMSX_Monitor.spec").read_text(encoding="utf-8")
         )
 
     def test_existing_config_preserved_and_adv_period_is_explicit(self) -> None:

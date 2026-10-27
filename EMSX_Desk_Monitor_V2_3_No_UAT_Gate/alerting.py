@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from pathlib import Path
+from resource_paths import asset_path
 from collections.abc import Callable
 from typing import Any
 
@@ -41,7 +41,7 @@ def play_alarm(fallback: Callable[[], Any]) -> None:
     except ImportError:
         fallback()
         return
-    sound = Path(__file__).resolve().parent / "assets" / "desk_alert.wav"
+    sound = asset_path("desk_alert.wav")
     try:
         if not sound.is_file():
             raise OSError("경보음 파일이 없습니다")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import argparse
+import sys
 import csv
 import os
 from datetime import datetime
@@ -17,6 +18,7 @@ from desk_core import DeskBook, line_status
 from order_fields import recent_order, sort_orders, client_instruction, creation_fields
 from alerting import AlertTracker, play_alarm
 from risk_rules import format_adv
+from resource_paths import asset_path
 from ack_engine import load_config, eligibility, write_authorized
 
 from ui_text import APP_TITLE, DESK_TITLE, localize
@@ -29,7 +31,7 @@ from kb_theme import (
     row_tags,
 )
 
-VERSION = "2.6.0"
+VERSION = "2.6.1"
 APP_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "EMSX_Desk_Monitor_HDGB"
 ADMIN_CONFIG = APP_DIR / "admin_config.json"
 LEDGER_PATH = APP_DIR / "ack_journal.sqlite3"
@@ -39,6 +41,11 @@ class MonitorApp:
     def __init__(self, root: tk.Tk, environment: str = "PROD") -> None:
         self.root = root
         self.root.title(APP_TITLE)
+        if sys.platform == "win32" and asset_path("emsx_monitor.ico").is_file():
+            try:
+                self.root.iconbitmap(default=str(asset_path("emsx_monitor.ico")))
+            except tk.TclError:
+                pass
         self.root.geometry("1330x790")
         self.root.minsize(1000, 650)
         self.messages = queue.Queue(maxsize=10000)
@@ -955,7 +962,16 @@ def main() -> None:
     parser.add_argument(
         "--demo", action="store_true", help="외부 연결 없는 모의 환경을 선택합니다"
     )
+    parser.add_argument(
+        "--self-test",
+        metavar="보고서",
+        help="외부 연결 없이 번들 구성 요소를 검사합니다",
+    )
     args = parser.parse_args()
+    if args.self_test:
+        from standalone_check import run_check
+
+        sys.exit(run_check(args.self_test))
     root = tk.Tk()
     MonitorApp(root, environment="DEMO" if args.demo else "PROD")
     root.mainloop()
