@@ -128,3 +128,70 @@ class TestWindowsBuild(unittest.TestCase):
             self.assertFalse(
                 any("주석" in part for command in commands for part in command)
             )
+
+    def test_nonzero_self_test_displays_underlying_report_error(self) -> None:
+        import json
+        from types import SimpleNamespace
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "검사.json"
+
+            def process(*args: object, **kwargs: object) -> SimpleNamespace:
+                report.write_text(
+                    json.dumps(
+                        {
+                            "성공": False,
+                            "독립실행": True,
+                            "단계": "BLPAPI 가져오기",
+                            "오류": "모의 DLL 오류 원문",
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+                return SimpleNamespace(returncode=1)
+
+            stderr = io.StringIO()
+            with (
+                patch.object(builder.subprocess, "run", side_effect=process),
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(stderr),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "종료 코드=1"):
+                    builder.check_executable(Path(tmp) / "app.exe", report)
+            self.assertIn("모의 DLL 오류 원문", stderr.getvalue())
+
+    def test_old_report_is_not_reused_after_startup_failure(self) -> None:
+        from types import SimpleNamespace
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "검사.json"
+            report.write_text('{"성공":true,"독립실행":true}', encoding="utf-8")
+            with patch.object(
+                builder.subprocess, "run", return_value=SimpleNamespace(returncode=1)
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "보고서가 생성되지 않았습니다"
+                ):
+                    builder.check_executable(Path(tmp) / "app.exe", report)
+            self.assertFalse(report.exists())
+
+    def test_successful_exit_still_requires_successful_frozen_report(self) -> None:
+        import json
+        from types import SimpleNamespace
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "검사.json"
+
+            def process(*args: object, **kwargs: object) -> SimpleNamespace:
+                report.write_text(
+                    json.dumps({"성공": True, "독립실행": False}), encoding="utf-8"
+                )
+                return SimpleNamespace(returncode=0)
+
+            with (
+                patch.object(builder.subprocess, "run", side_effect=process),
+                redirect_stdout(io.StringIO()),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "독립 실행 검사 실패"):
+                    builder.check_executable(Path(tmp) / "app.exe", report)

@@ -9,7 +9,13 @@ from PyInstaller.utils.hooks import collect_all
 if sys.platform != 'win32' or struct.calcsize('P') != 8:
     raise RuntimeError('Windows x64 Python으로 빌드하십시오')
 root = Path(SPECPATH)
+sys.path.insert(0, str(root))
+from blpapi_bundle import ffiutils_entry, preserve_ffiutils
+import blpapi.internals as sdk_internals
+ffi_entry = ffiutils_entry(sdk_internals)
 data, binaries, hidden = collect_all('blpapi')
+# 의존성 분석에는 원본을 제공하고, 최종 배치에서는 ABI 파일명을 복구한다.
+binaries.append((ffi_entry[1], 'blpapi'))
 # SDK를 별도로 사용하는 설치도 지원한다. DLL 자체는 재배포 승인을 확인해야 한다.
 sdk = os.environ.get('BLPAPI_CPP_SDK')
 if sdk:
@@ -44,11 +50,13 @@ data += [(str(asset), 'assets')]
 for icon in (root / 'assets').glob('*.ico'):
     data.append((str(icon), 'assets'))
 icons = list((root / 'assets').glob('*.ico'))
-a = Analysis([str(root / 'emsx_desk_monitor.py')], pathex=[str(root)],
+a = Analysis([str(root / 'emsx_entry.py')], pathex=[str(root)],
              binaries=binaries, datas=data,
              hiddenimports=hidden + ['tkinter', 'tkinter.ttk', 'winsound', 'sqlite3'],
              runtime_hooks=[str(root / 'packaging' / 'runtime_blpapi.py')],
              excludes=[], noarchive=False)
+# SDK의 ctypes 로더가 glob으로 찾는 실제 ABI 파일명을 보존한다.
+a.binaries = preserve_ffiutils(a.binaries, ffi_entry)
 # Python 바인딩만 있고 C++ 런타임이 빠진 빌드는 배포하지 않는다.
 runtime_dlls = [Path(entry[1]) for entry in a.binaries
                 if Path(entry[0]).name.lower() == 'blpapi3_64.dll']

@@ -88,6 +88,47 @@ def prepare() -> None:
     print("오프라인 의존성 설치·검사 완료")
 
 
+def check_executable(executable: Path, report: Path) -> dict[str, object]:
+    """비정상 종료라도 보고서를 먼저 읽어 원래 예외와 단계를 출력한다."""
+    report.unlink(missing_ok=True)
+    try:
+        process = subprocess.run(
+            [str(executable), "--self-test", str(report)],
+            cwd=ROOT,
+            check=False,
+            timeout=180,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"자체 검사 시간 초과. 검사 보고서·오류 창을 확인하십시오: {report}"
+        ) from exc
+    result: dict[str, object] = {}
+    if report.is_file():
+        try:
+            result = json.loads(report.read_text(encoding="utf-8-sig"))
+            if not isinstance(result, dict):
+                raise ValueError("보고서가 객체 형식이 아닙니다")
+        except (ValueError, OSError) as exc:
+            raise RuntimeError(f"자체 검사 보고서 해석 실패: {report}: {exc}") from exc
+        print(f"자체 검사 단계: {result.get('단계', '이전 버전 보고서')}")
+        if result.get("오류"):
+            print(str(result["오류"]), file=sys.stderr)
+    else:
+        raise RuntimeError(
+            f"자체 검사 보고서가 생성되지 않았습니다. 종료 코드={process.returncode}. "
+            "실행 파일의 시작 오류 창과 DLL·런타임 훅을 확인하십시오"
+        )
+    if (
+        process.returncode != 0
+        or result.get("성공") is not True
+        or result.get("독립실행") is not True
+    ):
+        raise RuntimeError(
+            f"독립 실행 검사 실패: 종료 코드={process.returncode}, 보고서={report}"
+        )
+    return result
+
+
 def build() -> None:
     """사전 검사부터 완성 파일 자체 검사까지 오류를 즉시 전달한다."""
     for name in ("tkinter", "blpapi", "PyInstaller"):
@@ -112,13 +153,7 @@ def build() -> None:
     if not executable.is_file():
         raise RuntimeError("실행 파일 출력이 없습니다")
     report = output / "패키지_검증.json"
-    report.unlink(missing_ok=True)
-    subprocess.run(
-        [str(executable), "--self-test", str(report)], cwd=ROOT, check=True, timeout=180
-    )
-    result = json.loads(report.read_text(encoding="utf-8"))
-    if result.get("성공") is not True or result.get("독립실행") is not True:
-        raise RuntimeError(f"독립 실행 검사 실패. 보고서를 확인하십시오: {report}")
+    check_executable(executable, report)
     with (output / "빌드_패키지_목록.txt").open("w", encoding="utf-8") as stream:
         run(pip_arguments("freeze"), stdout=stream)
     print(f"빌드·독립 실행 검사 완료: {executable}")
