@@ -411,3 +411,11 @@ Windows 실행 파일은 현재 Linux 작업 환경에서 생성·검증하지 �
 `python windows_build.py prepare`, `python windows_build.py build`를 각각 별도 명령으로 실행합니다.
 다운로드는 연결 가능한 준비 PC에서만 수행하며, 설치는 로컬 wheelhouse만 사용합니다.
 BLPAPI는 Bloomberg 공식 저장소에서 받습니다. 상세 절차는 [오프라인 배포 안내](OFFLINE_DEPLOY_KO.md)를 참조하십시오.
+
+
+## 2.6.3 Windows 파일 인코딩 보완
+
+CP949 환경에서 UTF-8 파일을 읽는 빌드 전 테스트 오류를 수정했습니다.
+파일 인코딩을 명시하고 빌드 도구의 자식 Python에 UTF-8 모드를 전달합니다.
+모의 세션 테스트 로그와 실제 연결 오류를 구분하도록 정리했으며 117개 테스트를 통과했습니다.
+기존 다운로드·설치가 성공했다면 빌드만 다시 실행하면 됩니다.

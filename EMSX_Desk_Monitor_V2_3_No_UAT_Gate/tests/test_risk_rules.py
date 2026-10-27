@@ -194,12 +194,13 @@ class TestRiskRules(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "admin.json"
             path.write_text(
-                json.dumps({"team_name": "HDGB", "beta_write_enabled": False})
+                json.dumps({"team_name": "HDGB", "beta_write_enabled": False}),
+                encoding="utf-8",
             )
             self.assertEqual(load_config(path)["adv_period"], 20)
-            path.write_text(json.dumps({"adv_period": 5}))
+            path.write_text(json.dumps({"adv_period": 5}), encoding="utf-8")
             self.assertEqual(load_config(path)["adv_period"], 5)
             for invalid in (5.0, True, 10, "20D"):
-                path.write_text(json.dumps({"adv_period": invalid}))
+                path.write_text(json.dumps({"adv_period": invalid}), encoding="utf-8")
                 with self.assertRaises(ValueError):
                     load_config(path)

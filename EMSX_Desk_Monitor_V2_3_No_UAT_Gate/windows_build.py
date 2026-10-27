@@ -21,8 +21,13 @@ def run(arguments: list[str], *, stdout: object = None) -> None:
     subprocess.run(arguments, cwd=ROOT, check=True, stdout=stdout)
 
 
+def python_arguments(*arguments: str) -> list[str]:
+    """자식 Python에도 UTF-8 모드를 명시하여 Windows 로캘과 분리한다."""
+    return [sys.executable, "-X", "utf8", *arguments]
+
+
 def pip_arguments(*arguments: str) -> list[str]:
-    return [sys.executable, "-m", "pip", "--disable-pip-version-check", *arguments]
+    return python_arguments("-m", "pip", "--disable-pip-version-check", *arguments)
 
 
 def download() -> None:
@@ -31,7 +36,9 @@ def download() -> None:
     wheelhouse.mkdir(exist_ok=True)
     requirements = [
         line.strip()
-        for line in (ROOT / "requirements.txt").read_text().splitlines()
+        for line in (ROOT / "requirements.txt")
+        .read_text(encoding="utf-8-sig")
+        .splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     ]
     bloomberg = [
@@ -90,16 +97,15 @@ def build() -> None:
     root = tk.Tk()
     root.withdraw()
     root.destroy()
-    run([sys.executable, "-m", "unittest", "discover", "-s", str(ROOT / "tests"), "-q"])
+    run(python_arguments("-m", "unittest", "discover", "-s", str(ROOT / "tests"), "-q"))
     run(
-        [
-            sys.executable,
+        python_arguments(
             "-m",
             "PyInstaller",
             "--noconfirm",
             "--clean",
             str(ROOT / "EMSX_Monitor.spec"),
-        ]
+        )
     )
     output = ROOT / "dist"
     executable = output / BINARY_NAME

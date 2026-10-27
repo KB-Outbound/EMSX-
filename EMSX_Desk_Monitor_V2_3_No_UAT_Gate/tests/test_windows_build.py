@@ -28,12 +28,16 @@ class TestWindowsBuild(unittest.TestCase):
                 self.assertEqual(content.count(b"\n"), content.count(b"\r\n"))
                 self.assertNotIn(b" -c ", content)
                 self.assertIn(b"windows_build.py", content)
-        self.assertIn("*.bat -text", (builder.ROOT / ".gitattributes").read_text())
+        self.assertIn(
+            "*.bat -text", (builder.ROOT / ".gitattributes").read_text(encoding="utf-8")
+        )
 
     def test_download_separates_official_bloomberg_repository(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "requirements.txt").write_text("blpapi>=3.0\npyinstaller\n")
+            (root / "requirements.txt").write_text(
+                "blpapi>=3.0\npyinstaller\n", encoding="utf-8"
+            )
             with (
                 patch.object(builder, "ROOT", root),
                 patch.object(builder, "run") as run,
@@ -89,3 +93,38 @@ class TestWindowsBuild(unittest.TestCase):
         ):
             self.assertEqual(builder.main(), 1)
             build.assert_not_called()
+
+    def test_child_python_reads_korean_file_in_utf8_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "한글.txt"
+            path.write_text("한글 검증", encoding="utf-8")
+            command = builder.python_arguments(
+                "-c",
+                "import sys; from pathlib import Path; assert sys.flags.utf8_mode == 1; "
+                "print(Path(sys.argv[1]).read_text())",
+                str(path),
+            )
+            result = subprocess.run(
+                command, check=True, capture_output=True, text=True, encoding="utf-8"
+            )
+            self.assertEqual(result.stdout.strip(), "한글 검증")
+
+    def test_utf8_bom_requirements_comment_is_not_a_package(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "requirements.txt").write_text(
+                "# 한글 주석\nblpapi\npyinstaller\n", encoding="utf-8-sig"
+            )
+            with (
+                patch.object(builder, "ROOT", root),
+                patch.object(builder, "run") as run,
+                redirect_stdout(io.StringIO()),
+            ):
+                builder.download()
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertEqual(len(commands), 2)
+            self.assertIn("pyinstaller", commands[0])
+            self.assertIn("blpapi", commands[1])
+            self.assertFalse(
+                any("주석" in part for command in commands for part in command)
+            )

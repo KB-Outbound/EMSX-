@@ -50,7 +50,9 @@ class TestSafety(unittest.TestCase):
             for result in results:
                 result.result()
         self.assertEqual(len(self.sent), 1)
-        self.assertIn("ACK_SENT", (self.path / "audit.jsonl").read_text())
+        self.assertIn(
+            "ACK_SENT", (self.path / "audit.jsonl").read_text(encoding="utf-8")
+        )
 
     def test_shared_database_reserves_once(self) -> None:
         other = AckLedger(self.path / "ack.db")
@@ -324,6 +326,7 @@ class TestSessionIntegration(unittest.TestCase):
             session = SimpleNamespace(
                 start=lambda: True,
                 openService=lambda name: True,
+                openServiceAsync=lambda name, correlationId: True,
                 getService=lambda name: object(),
                 subscribe=lambda subs: subscriptions.append(subs),
                 nextEvent=lambda timeout: next(events),
@@ -342,7 +345,10 @@ class TestSessionIntegration(unittest.TestCase):
                 SubscriptionList=lambda: SimpleNamespace(add=lambda **kw: None),
             )
             try:
-                worker._run_session(api)
+                with self.assertLogs("emsx", level="ERROR") as logs:
+                    worker._run_session(api)
+                self.assertIn("SessionConnectionDown", "\n".join(logs.output))
+                self.assertNotIn("AttributeError", "\n".join(logs.output))
                 self.assertTrue(worker.feed_error)
                 self.assertFalse(worker.engine.armed)
                 self.assertEqual(len(subscriptions), 5)
