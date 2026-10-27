@@ -31,7 +31,7 @@ from kb_theme import (
     row_tags,
 )
 
-VERSION = "2.6.4"
+VERSION = "2.6.5"
 APP_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "EMSX_Desk_Monitor_HDGB"
 ADMIN_CONFIG = APP_DIR / "admin_config.json"
 LEDGER_PATH = APP_DIR / "ack_journal.sqlite3"
@@ -594,13 +594,19 @@ class MonitorApp:
                     self.armed = False
                     self.arm_state.set("안전장치에 의해 자동 수신확인 해제")
                     self._append("안전 해제: " + localize(m.get("reason", "")))
+                elif typ == "ack_batch":
+                    self._append(
+                        f"Ack 배치 {m['batch_id'][:12]}: Order {m['count']}개 / "
+                        f"{localize(m.get('state', ''))} "
+                        f"{localize(m.get('detail', ''))[:120]}"
+                    )
                 elif typ == "ack_state":
                     seq = m["sequence"]
                     self.ack_states[seq] = (
                         localize(m.get("state", "")),
                         localize(m.get("detail", "")),
                     )
-                    if m.get("state") in (
+                    if not m.get("batch_id") and m.get("state") in (
                         "SENT",
                         "API_ERROR",
                         "UNKNOWN",

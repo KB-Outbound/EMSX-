@@ -60,6 +60,7 @@ ENRICHMENT_FIELDS = {903: "EMSX_NOTES", 904: "EMSX_BASKET_NAME", 905: "EMSX_TIME
 INT_FIELDS = {
     "EVENT_STATUS",
     "STATUS",
+    "ERROR_CODE",
     "API_SEQ_NUM",
     "EMSX_SEQUENCE",
     "EMSX_ROUTE_ID",
@@ -309,7 +310,7 @@ class BloombergWorker(threading.Thread):
             )
 
     def _subscribe_enrichment(self, A: Any, service: str) -> None:
-        """필드별 독립 구독으로 하나의 거부가 다른 필드나 기본 구독에 전파되지 않게 한다."""
+        """필드별로 구독하여 개별 거부가 기본 구독에 전파되지 않게 한다."""
         for cid, field in ENRICHMENT_FIELDS.items():
             try:
                 subscriptions = A.SubscriptionList()
@@ -373,11 +374,20 @@ class BloombergWorker(threading.Thread):
         return previous is None or api_seq > previous
 
     def _send(self, seq: int, cid: int) -> None:
+        """기존 단건 전송 호출을 배치 경계로 연결한다."""
+        self._send_batch((seq,), cid)
+
+    def _send_batch(self, sequences: tuple[int, ...], cid: int) -> None:
         # 실제 API 전송 경계다. 모든 사전 검증 후에만 호출한다.
         if self.stop_event.is_set() or not self._ready():
             raise RuntimeError("중지 또는 피드 비정상으로 전송 차단")
+        if not sequences:
+            raise ValueError("빈 Ack 배치는 전송할 수 없습니다")
         request = self.service.createRequest("SellSideAck")
-        request.append("EMSX_SEQUENCE", seq)
+        for seq in sequences:
+            request.append("EMSX_SEQUENCE", seq)
+        if self.stop_event.is_set() or not self._ready():
+            raise RuntimeError("Ack 배치 준비 중 중지 또는 피드 상태 변경")
         self.session.sendRequest(request, correlationId=self.api.CorrelationId(cid))
 
     def _commands(self) -> None:
@@ -404,6 +414,7 @@ class BloombergWorker(threading.Thread):
 
     def _process_response(self, event: Any) -> None:
         final = event.eventType() == self.api.Event.RESPONSE
+        responses: dict[int, tuple[str, int | str, str]] = {}
         for msg in event:
             if self.reference and self.reference.handle_response(msg, final=False):
                 continue
@@ -422,6 +433,8 @@ class BloombergWorker(threading.Thread):
                 )
                 continue
             status = read_field(msg, "STATUS")
+            if typ == "ErrorInfo":
+                status = read_field(msg, "ERROR_CODE")
             if status is None:
                 LOGGER.warning(
                     "Ack 응답 STATUS 누락: 상관 ID=%s · 타임아웃까지 대기", cid
@@ -434,7 +447,12 @@ class BloombergWorker(threading.Thread):
             detail = (
                 read_field(msg, "MESSAGE") or read_field(msg, "ERROR_MESSAGE") or ""
             )
-            self.engine.on_response(cid, typ, status, detail)
+            previous = responses.get(cid)
+            # 같은 이벤트의 여러 메시지에 오류가 섞이면 성공으로 덮어쓰지 않는다.
+            if previous is None or (previous[0] == "SellSideAck" and previous[1] == 0):
+                responses[cid] = (typ, status, detail)
+        for cid, (typ, status, detail) in responses.items():
+            self.engine.on_response(cid, typ, status, detail, final=final)
         if self.reference:
             self.reference.end_event(final)
 
@@ -561,6 +579,7 @@ class BloombergWorker(threading.Thread):
             self._send,
             Path(self.ledger_path).with_name("ack_audit.jsonl"),
             date_guard=recent_order,
+            batch_send_func=self._send_batch,
         )
         self.reference = ReferenceDataFeed(self.session, A, self.emit, self._warn)
         order_subs = A.SubscriptionList()
@@ -581,7 +600,7 @@ class BloombergWorker(threading.Thread):
             self._commands()
             if self.stop_event.is_set():
                 break
-            event = self.session.nextEvent(50)
+            event = self.session.nextEvent(self.engine.batch_timeout_ms())
             typ = event.eventType()
             if typ == A.Event.SUBSCRIPTION_DATA:
                 for msg in event:
@@ -628,7 +647,8 @@ class BloombergWorker(threading.Thread):
                         except Exception:
                             request_id = "추출 실패"
                         LOGGER.error(
-                            "구독 거부 또는 종료: 환경=%s 구독=%s 상관ID=%s 종류=%s 요청ID=%s 요청필드=%s 사유=%s",
+                            "구독 거부 또는 종료: 환경=%s 구독=%s 상관ID=%s "
+                            "종류=%s 요청ID=%s 요청필드=%s 사유=%s",
                             self.environment,
                             feed,
                             cid,
@@ -653,16 +673,22 @@ class BloombergWorker(threading.Thread):
                         if feed is not None and self.enrichment_requested:
                             self.enrichment_enabled = False
                             LOGGER.warning(
-                                "기본 구독 종료 후 다음 연결은 선택 구독 없이 복구합니다"
+                                "기본 구독 종료 후 다음 연결은 "
+                                "선택 구독 없이 복구합니다"
                             )
                         self._trip(f"{feed or '?'} {name}: {reason}")
                         return
             elif typ in (A.Event.RESPONSE, A.Event.PARTIAL_RESPONSE):
                 self._process_response(event)
             elif typ == getattr(A.Event, "REQUEST_STATUS", -999):
-                if self.reference:
-                    for msg in event:
+                for msg in event:
+                    if self.reference:
                         self.reference.handle_response(msg, final=False)
+                    for correlation in msg.correlationIds():
+                        cid = correlation.value()
+                        if self.engine and cid in self.engine.pending:
+                            self.engine.on_request_failure(cid, str(msg))
+                if self.reference:
                     self.reference.end_event(True)
             elif typ in (A.Event.SESSION_STATUS, A.Event.SERVICE_STATUS, A.Event.ADMIN):
                 for msg in event:
@@ -704,4 +730,7 @@ class BloombergWorker(threading.Thread):
             if self._ready() and self.reference:
                 self.reference.tick()
             if self.engine:
+                self._commands()
                 self.engine.check_pending()
+                if not self.stop_event.is_set() and not self.reconnect_requested:
+                    self.engine.flush_batch()
