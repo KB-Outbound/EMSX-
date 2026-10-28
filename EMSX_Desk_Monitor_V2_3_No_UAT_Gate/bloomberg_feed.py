@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from typing import Any, Callable, Sequence
+from contextlib import ExitStack
 import queue
 import re
 import threading
@@ -13,7 +14,7 @@ import time
 from pathlib import Path
 from ack_engine import AckEngine, AckLedger
 from order_fields import recent_order
-from diagnostics import LOGGER, configure_diagnostics
+from diagnostics import LOGGER, diagnostic_session
 from feed_parsing import read_scalar, integer
 from reference_data import ReferenceDataFeed
 
@@ -482,16 +483,25 @@ class BloombergWorker(threading.Thread):
         self.enrichment_seq.clear()
 
     def run(self) -> None:
-        if self.ledger_path:
-            try:
-                path = configure_diagnostics(Path(self.ledger_path).parent)
-                self.emit("diagnostics", path=str(path))
-            except OSError:
-                LOGGER.error("진단 로그 파일 초기화 실패", exc_info=True)
-                self._warn(
-                    "diagnostic-file",
-                    "진단 파일을 열지 못했습니다. 폴더 권한을 확인하십시오",
-                )
+        """재연결을 포함한 작업자 수명 동안만 진단 파일을 소유한다."""
+        with ExitStack() as resources:
+            if self.ledger_path:
+                try:
+                    path = resources.enter_context(
+                        diagnostic_session(Path(self.ledger_path).parent)
+                    )
+                except OSError:
+                    LOGGER.error("진단 로그 파일 초기화 실패", exc_info=True)
+                    self._warn(
+                        "diagnostic-file",
+                        "진단 파일을 열지 못했습니다. 폴더 권한을 확인하십시오",
+                    )
+                else:
+                    self.emit("diagnostics", path=str(path))
+            self._run()
+
+    def _run(self) -> None:
+        """모든 종료 경로가 진단 파일 소유 범위 안에서 수행되도록 한다."""
         try:
             import blpapi
         except ImportError:

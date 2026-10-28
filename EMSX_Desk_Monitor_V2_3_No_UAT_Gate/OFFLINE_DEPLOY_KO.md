@@ -193,3 +193,15 @@ Linux에서 수행한 회귀 검증이며 실제 Windows DLL 실행·새 EXE 검
 `[배치 Ack] Order N개 ... sendRequest=1 CID=...`를 확인할 수 있습니다.
 이는 요청 제출 기록이며 실제 처리 결과는 배치 응답·저널·EMSX 상태로 대조합니다.
 총 165개 오프라인 테스트를 통과했으며 대상 Windows 자체 검사와 Bloomberg 응답 검증은 별도입니다.
+
+
+## 2.6.7 빌드 전 테스트의 WinError 32 수정
+
+`test_worker_batches_on_background_thread_and_honors_stop_command` 종료 시
+임시 폴더의 `feed_diagnostics.log`가 열려 있어 삭제에 실패하는 문제를 수정했습니다.
+작업자 종료·초기화 실패 시 진단 파일을 정상 해제하며 기존 배치 Ack는 유지합니다.
+`diagnostics.py`, `bloomberg_feed.py`, `tests/test_diagnostics.py` 등을 포함한 전체 소스를 교체하고
+프로젝트 폴더에서 `python windows_build.py build`를 다시 실행하십시오.
+기존 wheelhouse·설치 패키지·설정·DB는 유지하며 추가 다운로드나 재설치는 필요하지 않습니다.
+총 172개 테스트를 통과했습니다. 대상 PC에서는 테스트에 이어
+`빌드·독립 실행 검사 완료`가 출력되는지 확인하십시오.

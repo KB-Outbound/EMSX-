@@ -22,6 +22,7 @@ from ack_engine import (
     default_config,
 )
 from bloomberg_feed import BloombergWorker
+from diagnostics import LOGGER
 from order_fields import desk_today
 from test_ack_engine import ORDER
 from test_resilience import SimEvent, SimMessage
@@ -548,10 +549,17 @@ class TestBatchWorker(unittest.TestCase):
             session.start.return_value = True
             session.openService.return_value = True
             sent_threads: list[int] = []
+            diagnostic_handlers: list[Any] = []
             clock = [100.0]
 
             def send(request: object, correlationId: int) -> None:
                 sent_threads.append(threading.get_ident())
+                filename = str((Path(tmp) / "feed_diagnostics.log").resolve())
+                diagnostic_handlers.extend(
+                    handler
+                    for handler in LOGGER.handlers
+                    if getattr(handler, "baseFilename", None) == filename
+                )
 
             def next_event(timeout: int) -> SimEvent:
                 self.assertGreaterEqual(timeout, 1)
@@ -595,6 +603,9 @@ class TestBatchWorker(unittest.TestCase):
                     worker.stop()
                     worker.join(1)
             self.assertFalse(worker.is_alive())
+            self.assertEqual(len(diagnostic_handlers), 1)
+            self.assertIsNone(diagnostic_handlers[0].stream)
+            self.assertNotIn(diagnostic_handlers[0], LOGGER.handlers)
             self.assertEqual(len(sent_threads), 1)
             self.assertEqual(
                 session.getService.return_value.createRequest.return_value.append.call_count,

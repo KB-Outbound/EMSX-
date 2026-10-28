@@ -31,7 +31,7 @@ from kb_theme import (
     row_tags,
 )
 
-VERSION = "2.6.6"
+VERSION = "2.6.7"
 APP_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "EMSX_Desk_Monitor_HDGB"
 ADMIN_CONFIG = APP_DIR / "admin_config.json"
 LEDGER_PATH = APP_DIR / "ack_journal.sqlite3"
