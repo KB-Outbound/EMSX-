@@ -56,6 +56,7 @@ BASE_ORDER_FIELDS = [
     if field not in OPTIONAL_ORDER_FIELDS and field != "EMSX_SEQUENCE"
 ]
 ENRICHMENT_FIELDS = {903: "EMSX_NOTES", 904: "EMSX_BASKET_NAME", 905: "EMSX_TIME"}
+EVENT_DRAIN_SECONDS = 0.025
 
 INT_FIELDS = {
     "EVENT_STATUS",
@@ -373,10 +374,6 @@ class BloombergWorker(threading.Thread):
         )
         return previous is None or api_seq > previous
 
-    def _send(self, seq: int, cid: int) -> None:
-        """기존 단건 전송 호출을 배치 경계로 연결한다."""
-        self._send_batch((seq,), cid)
-
     def _send_batch(self, sequences: tuple[int, ...], cid: int) -> None:
         # 실제 API 전송 경계다. 모든 사전 검증 후에만 호출한다.
         if self.stop_event.is_set() or not self._ready():
@@ -388,7 +385,18 @@ class BloombergWorker(threading.Thread):
             request.append("EMSX_SEQUENCE", seq)
         if self.stop_event.is_set() or not self._ready():
             raise RuntimeError("Ack 배치 준비 중 중지 또는 피드 상태 변경")
+        LOGGER.info(
+            "[배치 Ack] Order %d개를 단일 요청으로 전송 시작: sendRequest=1 CID=%d",
+            len(sequences),
+            cid,
+        )
         self.session.sendRequest(request, correlationId=self.api.CorrelationId(cid))
+        LOGGER.info(
+            "[배치 Ack] Order %d개 단일 요청 제출 완료: "
+            "sendRequest=1 CID=%d · API 응답 대기",
+            len(sequences),
+            cid,
+        )
 
     def _commands(self) -> None:
         for _ in range(50):
@@ -576,8 +584,7 @@ class BloombergWorker(threading.Thread):
             self.config,
             self.ledger,
             self._notify,
-            self._send,
-            Path(self.ledger_path).with_name("ack_audit.jsonl"),
+            audit_path=Path(self.ledger_path).with_name("ack_audit.jsonl"),
             date_guard=recent_order,
             batch_send_func=self._send_batch,
         )
@@ -596,11 +603,22 @@ class BloombergWorker(threading.Thread):
                 "주문·라우트 구독 / 자동 Ack 해제"
             ),
         )
+        LOGGER.info(
+            "[배치 Ack] 전체 대기 목록 일괄 전송 모드: "
+            "단건 대체 전송 없음 · 50개 분할 없음"
+        )
+        buffered_event: Any | None = None
+        drain_started = time.monotonic()
         while not self.stop_event.is_set() and not self.reconnect_requested:
             self._commands()
             if self.stop_event.is_set():
                 break
-            event = self.session.nextEvent(self.engine.batch_timeout_ms())
+            if buffered_event is None:
+                event = self.session.nextEvent(self.engine.batch_timeout_ms())
+                drain_started = time.monotonic()
+            else:
+                event = buffered_event
+                buffered_event = None
             typ = event.eventType()
             if typ == A.Event.SUBSCRIPTION_DATA:
                 for msg in event:
@@ -727,10 +745,20 @@ class BloombergWorker(threading.Thread):
             ):
                 self.enrichment_requested = True
                 self._subscribe_enrichment(A, service)
-            if self._ready() and self.reference:
-                self.reference.tick()
             if self.engine:
                 self._commands()
                 self.engine.check_pending()
                 if not self.stop_event.is_set() and not self.reconnect_requested:
+                    # 이미 도착한 이벤트를 먼저 반영하여 이벤트별 단건 전송을 막는다.
+                    # 순번 단절·중지·취소도 먼저 처리하며 연속 수신 시간을 제한한다.
+                    poll = getattr(self.session, "tryNextEvent", None)
+                    if (
+                        callable(poll)
+                        and time.monotonic() - drain_started < EVENT_DRAIN_SECONDS
+                    ):
+                        buffered_event = poll()
+                        if buffered_event is not None:
+                            continue
                     self.engine.flush_batch()
+            if self._ready() and self.reference and not self.stop_event.is_set():
+                self.reference.tick()

@@ -6,7 +6,6 @@ TEAMVIEW 조회 권한은 전송 권한을 증명하지 않는다. 승인된 단
 from __future__ import annotations
 from typing import Any, Callable, Sequence
 from dataclasses import dataclass
-from itertools import islice
 from uuid import uuid4
 import math
 import json
@@ -22,8 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-ACK_BATCH_SIZE = 50
-ACK_BATCH_WINDOW_SECONDS = 0.010
+ACK_BATCH_QUIET_SECONDS = 0.050
+ACK_BATCH_MAX_WAIT_SECONDS = 0.250
 ACK_MAX_INFLIGHT = 20
 
 
@@ -242,7 +241,7 @@ class AckEngine:
         config: dict[str, Any],
         ledger: AckLedger,
         notify: Callable[..., None],
-        send_func: Callable[[int, int], None],
+        send_func: Callable[[int, int], None] | None = None,
         audit_path: Path | None = None,
         date_guard: Callable[[dict[str, Any]], bool] | None = None,
         batch_send_func: Callable[[tuple[int, ...], int], None] | None = None,
@@ -253,7 +252,11 @@ class AckEngine:
         self.config = config
         self.ledger = ledger
         self.notify = notify
-        self.send_func = send_func
+        # 이전 생성자 인수는 받되 자동 전송의 단건 대체 경로로 사용하지 않는다.
+        if send_func is not None:
+            LOGGER.warning(
+                "단건 Ack 콜백은 사용하지 않습니다. batch_send_func를 지정하십시오"
+            )
         self.batch_send_func = batch_send_func
         self.audit_path = Path(audit_path) if audit_path else None
         self.date_guard = date_guard
@@ -276,7 +279,7 @@ class AckEngine:
         if state in ("BLOCKED", "DUPLICATE_BLOCKED"):
             self.audit("ACK_" + state, seq, detail)
         fields: dict[str, Any] = {"sequence": seq, "state": state, "detail": detail}
-        if batch_id and self.batch_send_func is not None:
+        if batch_id:
             fields["batch_id"] = batch_id
         self.notify("ack_state", **fields)
 
@@ -464,15 +467,10 @@ class AckEngine:
             ):
                 self.publish(seq, "BLOCKED", "Not healthy/armed")
             elif event_status == 6:
-                if self.batch_send_func is None:
-                    self._send_ack(seq)
-                elif seq not in self.queued:
+                if seq not in self.queued:
                     self.queued[seq] = time.monotonic()
-                    self.publish(seq, "QUEUED", "신규 Order 배치 전송 대기")
             else:
-                if seq in self.queued:
-                    self.publish(seq, "QUEUED", "신규 Order 배치 전송 대기")
-                else:
+                if seq not in self.queued:
                     self.publish(
                         seq, "OBSERVE_ONLY", "No auto ACK on later dynamic updates"
                     )
@@ -484,39 +482,41 @@ class AckEngine:
                 )
 
     @synchronized
-    def _send_ack(self, seq: int) -> None:
-        """기존 단건 호출 계약을 유지한다."""
-        self._submit((seq,))
+    def _batch_due_at(self) -> float:
+        """조용한 수신 간격과 최대 수집 시간을 함께 적용한다."""
+        first = next(iter(self.queued.values()))
+        last = self.queued[next(reversed(self.queued))]
+        return min(
+            first + ACK_BATCH_MAX_WAIT_SECONDS,
+            last + ACK_BATCH_QUIET_SECONDS,
+        )
 
     @synchronized
     def batch_timeout_ms(self) -> int:
         """배치 기한에 맞춰 수신 대기만 줄이며 0의 무한 대기는 사용하지 않는다."""
         if not self.queued or len(self.pending) >= ACK_MAX_INFLIGHT:
             return 50
-        if len(self.queued) >= ACK_BATCH_SIZE:
-            return 1
-        due = next(iter(self.queued.values())) + ACK_BATCH_WINDOW_SECONDS
-        return max(1, min(50, math.ceil((due - time.monotonic()) * 1000)))
+        remaining = self._batch_due_at() - time.monotonic()
+        return max(1, min(50, math.ceil(remaining * 1000)))
 
     @synchronized
-    def flush_batch(self) -> None:
-        """수신 루프 한 회에 최대 한 배치를 전송하고 응답을 기다리지 않는다."""
-        if self.closed or not self.queued or self.batch_send_func is None:
+    def flush_batch(self, *, force: bool = False) -> None:
+        """대기 목록 전체를 한 번에 분리하여 하나의 요청으로 제출한다."""
+        if self.closed or not self.queued:
             return
         if not self.armed or not self.stream_ready or self.error:
             self.queued.clear()
             return
         if len(self.pending) >= ACK_MAX_INFLIGHT:
             return
-        if (
-            len(self.queued) < ACK_BATCH_SIZE
-            and time.monotonic() - next(iter(self.queued.values()))
-            < ACK_BATCH_WINDOW_SECONDS
-        ):
+        if not force and time.monotonic() < self._batch_due_at():
             return
-        sequences = tuple(islice(self.queued, ACK_BATCH_SIZE))
-        for seq in sequences:
-            self.queued.pop(seq)
+        if self.batch_send_func is None:
+            self.disarm("배치 Ack 전송 콜백 누락: 단건 대체 전송을 차단했습니다")
+            return
+        # 수집과 분리는 동일한 잠금 안에서 수행하며 임의 건수로 쪼개지 않는다.
+        sequences = tuple(self.queued)
+        self.queued.clear()
         self._submit(sequences)
 
     @synchronized
@@ -524,9 +524,8 @@ class AckEngine:
         self, action: str, cid: int, record: PendingAck, detail: str = ""
     ) -> None:
         """배치 목록 전체를 한 번의 파일 동기화로 기록한다."""
-        prefix = "ACK_BATCH_" if self.batch_send_func is not None else "ACK_"
         self.audit(
-            prefix + action,
+            "ACK_BATCH_" + action,
             record.sequences[0] if len(record.sequences) == 1 else None,
             detail,
             batch_id=record.batch_id,
@@ -539,15 +538,15 @@ class AckEngine:
         self, cid: int, record: PendingAck, state: str, detail: str = ""
     ) -> None:
         """화면 큐에 배치 요약만 넣으며 화면 객체에 직접 접근하지 않는다."""
-        if self.batch_send_func is not None:
-            self.notify(
-                "ack_batch",
-                batch_id=record.batch_id,
-                correlation_id=cid,
-                count=len(record.sequences),
-                state=state,
-                detail=detail,
-            )
+        self.notify(
+            "ack_batch",
+            batch_id=record.batch_id,
+            correlation_id=cid,
+            count=len(record.sequences),
+            sequences=record.sequences,
+            state=state,
+            detail=detail,
+        )
 
     @synchronized
     def _submit(self, sequences: tuple[int, ...]) -> None:
@@ -557,6 +556,9 @@ class AckEngine:
             for seq in sequences:
                 self.new_while_armed.discard(seq)
                 self.publish(seq, "BLOCKED", reason if not ok else "Not armed/ready")
+            return
+        if self.batch_send_func is None:
+            self.disarm("배치 Ack 전송 콜백 누락: 단건 대체 전송을 차단했습니다")
             return
         valid_sequences: list[int] = []
         for seq in sequences:
@@ -594,6 +596,15 @@ class AckEngine:
                 )
         if not reserved:
             return
+        LOGGER.info(
+            "[배치 Ack] 일괄 전송 대상 확정: 수집=%d 적격=%d 신규예약=%d "
+            "batch_id=%s CID=%d",
+            len(sequences),
+            len(valid_sequences),
+            len(reserved),
+            batch_id,
+            cid,
+        )
         record = PendingAck(reserved, time.monotonic(), batch_id)
         try:
             self._batch_audit("RESERVED", cid, record, "전송 전 영속 예약 완료")
@@ -614,22 +625,14 @@ class AckEngine:
             )
             self.pending[cid] = record
             registered = True
-            if self.batch_send_func is not None:
-                self.batch_send_func(reserved, cid)
-            else:
-                self.send_func(reserved[0], cid)
+            self.batch_send_func(reserved, cid)
             # 동기 응답 대역에서 이미 확정된 결과를 SENT로 덮어쓰지 않는다.
             if cid not in self.pending:
                 return
             self._batch_audit("SENT", cid, record, "API 응답 대기")
-            for seq in reserved:
-                self.publish(
-                    seq,
-                    "SENT",
-                    "ACK request pending; not yet confirmed",
-                    batch_id=batch_id,
-                )
-            self._batch_notify(cid, record, "SENT")
+            self._batch_notify(
+                cid, record, "SENT", "ACK request pending; not yet confirmed"
+            )
         except Exception as ex:
             was_armed = self.armed
             self.inhibit()
@@ -645,8 +648,6 @@ class AckEngine:
                 self.env, self.team, reserved, "UNKNOWN", details + " " + str(ex)
             )
             self._batch_audit("SEND_UNKNOWN", cid, record, str(ex))
-            for seq in reserved:
-                self.publish(seq, "UNKNOWN", str(ex), batch_id=batch_id)
             self._batch_notify(cid, record, "UNKNOWN", str(ex))
             self.disarm("ACK transmit uncertain / " + str(ex))
 
@@ -690,8 +691,6 @@ class AckEngine:
         )
         self._batch_audit(action, cid, record, detail)
         self.pending.pop(cid, None)
-        for seq in record.sequences:
-            self.publish(seq, result, detail, batch_id=record.batch_id)
         self._batch_notify(cid, record, result, detail)
 
     @synchronized

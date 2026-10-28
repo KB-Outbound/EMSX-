@@ -153,7 +153,7 @@ class TestMessageIsolation(unittest.TestCase):
             {**default_config(), "beta_write_enabled": True},
             self.ledger,
             Mock(),
-            self.sent,
+            batch_send_func=self.sent,
         )
         self.worker.engine = self.engine
         self.worker.started = {"O", "R"}
@@ -175,11 +175,13 @@ class TestMessageIsolation(unittest.TestCase):
                     broken="EMSX_NOTES",
                 )
             )
+            self.engine.flush_batch(force=True)
         self.assertTrue(self.engine.armed)
         self.assertFalse(self.worker.feed_error)
         self.worker._handle_data_message(
             Message({**ORDER, "EVENT_STATUS": 6, "API_SEQ_NUM": 1})
         )
+        self.engine.flush_batch(force=True)
         self.sent.assert_called_once()
 
     def test_bad_mandatory_field_blocks_only_affected_order(self) -> None:
@@ -189,27 +191,32 @@ class TestMessageIsolation(unittest.TestCase):
                     {**ORDER, "EMSX_AMOUNT": "bad", "EVENT_STATUS": 6, "API_SEQ_NUM": 1}
                 )
             )
+            self.engine.flush_batch(force=True)
         self.assertTrue(self.engine.armed)
         self.sent.assert_not_called()
         self.worker._handle_data_message(
             Message({**ORDER, "EVENT_STATUS": 6, "API_SEQ_NUM": 2})
         )
+        self.engine.flush_batch(force=True)
         self.sent.assert_not_called()
         self.worker._handle_data_message(
             Message(
                 {**ORDER, "EMSX_SEQUENCE": 112, "EVENT_STATUS": 6, "API_SEQ_NUM": 3}
             )
         )
+        self.engine.flush_batch(force=True)
         self.sent.assert_called_once()
 
     def test_missing_status_does_not_cause_false_sequence_gap(self) -> None:
         with self.assertLogs("emsx", logging.WARNING):
             self.worker._handle_data_message(Message({**ORDER, "API_SEQ_NUM": 1}))
+            self.engine.flush_batch(force=True)
         self.worker._handle_data_message(
             Message(
                 {**ORDER, "EMSX_SEQUENCE": 112, "EVENT_STATUS": 6, "API_SEQ_NUM": 2}
             )
         )
+        self.engine.flush_batch(force=True)
         self.assertTrue(self.engine.armed)
         self.assertFalse(self.worker.feed_error)
         self.assertEqual(self.worker.seq_last["O"], 2)
@@ -227,10 +234,12 @@ class TestMessageIsolation(unittest.TestCase):
                 cid=903,
             )
         )
+        self.engine.flush_batch(force=True)
         self.assertFalse(self.engine.orders)
         self.worker._handle_data_message(
             Message({**ORDER, "EVENT_STATUS": 4, "API_SEQ_NUM": 1})
         )
+        self.engine.flush_batch(force=True)
         self.assertEqual(self.worker.seq_last["O"], 1)
         data = [item for item in list(self.output.queue) if item["type"] == "data"]
         self.assertEqual(data[-1]["fields"]["EMSX_NOTES"], "TWAP")
@@ -245,6 +254,7 @@ class TestMessageIsolation(unittest.TestCase):
                 cid=903,
             )
         )
+        self.engine.flush_batch(force=True)
         self.sent.assert_not_called()
         self.assertEqual(self.worker.seq_last["O"], 1)
         self.assertTrue(self.engine.armed)
@@ -422,6 +432,7 @@ class TestInitializationIntegration(unittest.TestCase):
                 ),
             ]
             session = Mock()
+            session.tryNextEvent.return_value = None
             session.start.return_value = True
             session.openService.return_value = True
             session.nextEvent.side_effect = events

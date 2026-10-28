@@ -30,8 +30,8 @@ class TestSafety(unittest.TestCase):
             {**default_config(), "beta_write_enabled": True},
             self.ledger,
             lambda *a, **kw: None,
-            lambda seq, cid: self.sent.append((seq, cid)),
-            self.path / "audit.jsonl",
+            audit_path=self.path / "audit.jsonl",
+            batch_send_func=lambda seqs, cid: self.sent.append((seqs, cid)),
         )
         self.engine.set_ready(True)
         self.engine.set_arm(True)
@@ -49,9 +49,10 @@ class TestSafety(unittest.TestCase):
             ]
             for result in results:
                 result.result()
+        self.engine.flush_batch(force=True)
         self.assertEqual(len(self.sent), 1)
         self.assertIn(
-            "ACK_SENT", (self.path / "audit.jsonl").read_text(encoding="utf-8")
+            "ACK_BATCH_SENT", (self.path / "audit.jsonl").read_text(encoding="utf-8")
         )
 
     def test_shared_database_reserves_once(self) -> None:
@@ -71,10 +72,11 @@ class TestSafety(unittest.TestCase):
             other.close()
 
     def test_immediate_response_not_overwritten(self) -> None:
-        self.engine.send_func = lambda seq, cid: self.engine.on_response(
+        self.engine.batch_send_func = lambda seq, cid: self.engine.on_response(
             cid, "SellSideAck", 0, "확인"
         )
         self.engine.on_order(6, ORDER, True, True)
+        self.engine.flush_batch(force=True)
         self.assertFalse(self.engine.pending)
         self.assertEqual(
             self.ledger.get("BETA", "HDGB", 111), "API_RESPONSE_OK_UNVERIFIED"
@@ -84,6 +86,7 @@ class TestSafety(unittest.TestCase):
         self.engine.audit_path = self.path
         with self.assertRaises(OSError):
             self.engine.on_order(6, ORDER, True, True)
+            self.engine.flush_batch(force=True)
         self.assertFalse(self.sent)
         self.assertFalse(self.engine.armed)
         self.assertEqual(self.ledger.get("BETA", "HDGB", 111), "AUDIT_FAILED")
@@ -91,20 +94,24 @@ class TestSafety(unittest.TestCase):
 
     def test_timeout_is_unknown_without_retry(self) -> None:
         self.engine.on_order(6, ORDER, True, True)
+        self.engine.flush_batch(force=True)
         with patch("ack_engine.time.monotonic", return_value=time.monotonic() + 21):
             self.engine.check_pending()
         self.engine.on_order(6, ORDER, True, True)
+        self.engine.flush_batch(force=True)
         self.assertEqual(len(self.sent), 1)
         self.assertEqual(self.ledger.get("BETA", "HDGB", 111), "UNKNOWN")
         self.assertFalse(self.engine.armed)
 
     def test_disconnect_and_close_block_reuse(self) -> None:
         self.engine.on_order(6, ORDER, True, True)
+        self.engine.flush_batch(force=True)
         self.engine.close()
         self.assertEqual(self.ledger.get("BETA", "HDGB", 111), "UNKNOWN")
         self.engine.set_ready(True)
         self.engine.set_arm(True)
         self.engine.on_order(6, {**ORDER, "EMSX_SEQUENCE": 112}, True, True)
+        self.engine.flush_batch(force=True)
         self.assertEqual(len(self.sent), 1)
         self.assertFalse(self.engine.orders)
 
@@ -118,7 +125,9 @@ class TestSafety(unittest.TestCase):
     def test_tracker_limit_fails_closed(self) -> None:
         self.engine.max_tracked_orders = 1
         self.engine.on_order(4, ORDER, True, True)
+        self.engine.flush_batch(force=True)
         self.engine.on_order(6, {**ORDER, "EMSX_SEQUENCE": 112}, True, True)
+        self.engine.flush_batch(force=True)
         self.assertFalse(self.sent)
         self.assertFalse(self.engine.armed)
 

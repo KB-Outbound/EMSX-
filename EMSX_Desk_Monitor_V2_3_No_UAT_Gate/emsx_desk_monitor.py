@@ -31,7 +31,7 @@ from kb_theme import (
     row_tags,
 )
 
-VERSION = "2.6.5"
+VERSION = "2.6.6"
 APP_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "EMSX_Desk_Monitor_HDGB"
 ADMIN_CONFIG = APP_DIR / "admin_config.json"
 LEDGER_PATH = APP_DIR / "ack_journal.sqlite3"
@@ -456,7 +456,10 @@ class MonitorApp:
         self.env_ctrl.configure(state="disabled")
         self.team_ctrl.configure(state="disabled")
         self.status.set("연결 중 / 자동 수신확인 해제")
-        self._append(f"{env} 모니터링 시작 / 구독 팀={team} / 자동 수신확인 해제")
+        self._append(
+            f"버전 {VERSION} / {env} 모니터링 시작 / "
+            f"구독 팀={team} / 자동 수신확인 해제"
+        )
         self.monitoring = True
         self.worker.start()
 
@@ -595,8 +598,16 @@ class MonitorApp:
                     self.arm_state.set("안전장치에 의해 자동 수신확인 해제")
                     self._append("안전 해제: " + localize(m.get("reason", "")))
                 elif typ == "ack_batch":
+                    result = (
+                        localize(m.get("state", "")),
+                        localize(m.get("detail", "")),
+                    )
+                    self.ack_states.update(
+                        dict.fromkeys(m.get("sequences", ()), result)
+                    )
                     self._append(
-                        f"Ack 배치 {m['batch_id'][:12]}: Order {m['count']}개 / "
+                        f"Ack 배치 {m['batch_id'][:12]}: "
+                        f"Order {m['count']}개 단일 요청 / "
                         f"{localize(m.get('state', ''))} "
                         f"{localize(m.get('detail', ''))[:120]}"
                     )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import csv
+import queue
 import tempfile
 import unittest
 from datetime import date
@@ -211,7 +212,7 @@ class TestAckDateSafety(unittest.TestCase):
                 config,
                 ledger,
                 Mock(),
-                sent,
+                batch_send_func=sent,
                 date_guard=lambda order: recent_order(order, TODAY),
             )
             try:
@@ -224,8 +225,10 @@ class TestAckDateSafety(unittest.TestCase):
                         True,
                         True,
                     )
+                    engine.flush_batch(force=True)
                 sent.assert_not_called()
                 engine.on_order(6, {**ORDER, "EMSX_DATE": 20260101}, True, True)
+                engine.flush_batch(force=True)
                 sent.assert_called_once()
                 sent.reset_mock()
                 engine.date_guard = Mock(side_effect=[True, False])
@@ -235,6 +238,7 @@ class TestAckDateSafety(unittest.TestCase):
                     True,
                     True,
                 )
+                engine.flush_batch(force=True)
                 sent.assert_not_called()
                 self.assertIsNone(ledger.get("BETA", "HDGB", 112))
             finally:
@@ -282,6 +286,34 @@ class Tree:
 
 
 class TestDisplayIntegration(unittest.TestCase):
+    def test_bulk_ack_state_updates_all_orders_with_one_queue_message(self) -> None:
+        app = MonitorApp.__new__(MonitorApp)
+        app.messages = queue.Queue()
+        app.root = Mock()
+        app.ack_states = {}
+        app._render = Mock()
+        app._append = Mock()
+        app.messages.put(
+            {
+                "type": "ack_batch",
+                "batch_id": "검증용배치식별자",
+                "count": 500,
+                "sequences": tuple(range(1, 501)),
+                "state": "SENT",
+                "detail": "API 응답 대기",
+            }
+        )
+        app._pump()
+        self.assertEqual(set(app.ack_states), set(range(1, 501)))
+        self.assertEqual(len(set(app.ack_states.values())), 1)
+        self.assertTrue(
+            all(value[1] == "API 응답 대기" for value in app.ack_states.values())
+        )
+        app._append.assert_called_once()
+        self.assertIn("Order 500개 단일 요청", app._append.call_args.args[0])
+        app._render.assert_called_once()
+        app.root.after.assert_called_once_with(50, app._pump)
+
     def test_date_basket_projection_and_alarm_dispatch(self) -> None:
         app = MonitorApp.__new__(MonitorApp)
         app.book = DeskBook(now=lambda: 1000)
