@@ -12,7 +12,13 @@ import threading
 from synchronization import synchronized
 from diagnostics import LOGGER
 from feed_parsing import integer
-from risk_rules import country_code, asian_delay_eligible, route_adv_percent, adv_check
+from risk_rules import (
+    country_code,
+    asian_delay_eligible,
+    contains_moc_instruction,
+    route_adv_percent,
+    adv_check,
+)
 from order_fields import client_instruction, creation_fields, sort_orders
 
 TERMINAL = {
@@ -256,14 +262,14 @@ class DeskBook:
         if key not in self.reference and len(self.reference) >= 100000:
             LOGGER.warning("장부 참조데이터 한도 초과")
             return
-        self.reference.setdefault(key, {}).update(
-            {
-                name: value
-                for name, value in fields.items()
-                if name
-                in {"iso_country", "sec_type", "avg_volume_5d", "avg_volume_20d"}
-            }
-        )
+        values = {
+            name: value
+            for name, value in fields.items()
+            if name in {"iso_country", "sec_type", "avg_volume_5d", "avg_volume_20d"}
+        }
+        if "iso_country" in values:
+            values["iso_country"] = country_code(values["iso_country"])
+        self.reference.setdefault(key, {}).update(values)
 
     @synchronized
     def full_view(
@@ -279,6 +285,8 @@ class DeskBook:
             metadata = self.reference.get(
                 text(f.get("EMSX_TICKER")).strip().casefold(), {}
             )
+            iso_country = country_code(metadata.get("iso_country"))
+            instruction = client_instruction(f)
             route_records = route_index.get(seq, [])
             broker_codes = sorted(
                 set(
@@ -299,30 +307,31 @@ class DeskBook:
             ):
                 if status == "ORD-PEND":
                     warning.append("Ack Pending")
-                if (
-                    asian_delay_eligible(metadata.get("iso_country"))
-                    and not route_records
-                    and status in PENDING
-                    and rec.acknowledged_at is not None
-                    and now - rec.acknowledged_at >= unrouted_minutes * 60
-                ):
-                    warning.append("Unrouted Warning")
                 active_routes = [
                     route for route in route_records if route.active_since is not None
                 ]
-                if (
-                    asian_delay_eligible(metadata.get("iso_country"))
-                    and active_routes
-                    and remain > 0
-                    and known_zero(f.get("EMSX_FILLED"))
-                    and all(
-                        known_zero(route.fields.get("EMSX_FILLED"))
-                        for route in route_records
-                    )
-                    and now - min(route.active_since for route in active_routes)
-                    >= nofill_minutes * 60
-                ):
-                    warning.append("No-Fill Alert")
+                # 두 시간 경고는 동일한 국가 판정을 통과한 주문에서만 검사한다.
+                if asian_delay_eligible(iso_country):
+                    if (
+                        not route_records
+                        and status in PENDING
+                        and rec.acknowledged_at is not None
+                        and now - rec.acknowledged_at >= unrouted_minutes * 60
+                    ):
+                        warning.append("Unrouted Warning")
+                    if (
+                        not contains_moc_instruction(instruction)
+                        and active_routes
+                        and remain > 0
+                        and known_zero(f.get("EMSX_FILLED"))
+                        and all(
+                            known_zero(route.fields.get("EMSX_FILLED"))
+                            for route in route_records
+                        )
+                        and now - min(route.active_since for route in active_routes)
+                        >= nofill_minutes * 60
+                    ):
+                        warning.append("No-Fill Alert")
                 if (
                     route_records
                     and not active_routes
@@ -343,8 +352,8 @@ class DeskBook:
                     "fill_pct": safe_pct(filled, qty),
                     "status": status,
                     "line_status": line_status(f.get("EMSX_STATUS")),
-                    "instruction": client_instruction(f),
-                    "iso_country": country_code(metadata.get("iso_country")),
+                    "instruction": instruction,
+                    "iso_country": iso_country,
                     "basket_name": text(f.get("EMSX_BASKET_NAME")),
                     **creation_fields(f),
                     "brokers": ",".join(broker_codes),

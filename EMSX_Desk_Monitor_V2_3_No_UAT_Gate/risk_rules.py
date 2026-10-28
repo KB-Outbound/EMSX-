@@ -12,12 +12,23 @@ ASIA_COUNTRIES = frozenset(
 
 def country_code(value: Any) -> str:
     """티커로 국가를 추정하지 않고 제공된 두 자리 ISO 코드만 정규화한다."""
-    code = str(value or "").strip().upper()
-    return code if len(code) == 2 and code.isascii() and code.isalpha() else ""
+    if not isinstance(value, str):
+        return ""
+    code = value.strip()
+    # 대문자 변환 전에 ASCII를 확인하여 유사한 유니코드가 허용 국가가 되지 않게 한다.
+    if len(code) != 2 or not code.isascii() or not code.isalpha():
+        return ""
+    return code.upper()
 
 
 def asian_delay_eligible(value: Any) -> bool:
+    """지정된 12개 코드에 정확히 일치할 때만 두 시간 경고를 허용한다."""
     return country_code(value) in ASIA_COUNTRIES
+
+
+def contains_moc_instruction(value: Any) -> bool:
+    """대소문자와 위치에 관계없이 MOC가 포함된 고객 지시인지 판정한다."""
+    return isinstance(value, str) and "MOC" in value.upper()
 
 
 def percentage_points(value: Any) -> Decimal | None:
@@ -46,7 +57,7 @@ def adv_check(instruction: str, sec_type: str, adv_pct: Any) -> tuple[bool, str]
 
 
 def route_adv_percent(quantity: Any, average_volume: Any) -> Decimal | None:
-    """Route 수량을 평균 거래량으로 나눈 백분율이다. 분모 누락·0·손상은 추정하지 않는다."""
+    """Route 수량의 평균 거래량 대비 백분율이다. 유효한 분모만 사용한다."""
     shares = percentage_points(quantity)
     volume = percentage_points(average_volume)
     if shares is None or volume is None or volume == 0:

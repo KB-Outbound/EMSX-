@@ -31,7 +31,7 @@ from kb_theme import (
     row_tags,
 )
 
-VERSION = "2.6.7"
+VERSION = "2.6.8"
 APP_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "EMSX_Desk_Monitor_HDGB"
 ADMIN_CONFIG = APP_DIR / "admin_config.json"
 LEDGER_PATH = APP_DIR / "ack_journal.sqlite3"
@@ -207,7 +207,10 @@ class MonitorApp:
         ttk.Entry(x, textvariable=self.nofill_min, width=5).pack(side="left", padx=5)
         ttk.Label(
             box,
-            text="※ FIX 수신 판정은 EMSX 상태 기준 · 지정 12개 ISO 국가만 적용 · 최초 관측 시간 기준 (분)",
+            text=(
+                "※ Route 지연·No-Fill: 지정 12개 발행국 ISO 기준 · "
+                "MOC 포함 시 No-Fill 제외 · FIX 수신: EMSX 상태 판정 · 관측 시간 기준"
+            ),
             foreground=GOLD,
             wraplength=950,
         ).pack(anchor="w", pady=(0, 6))
