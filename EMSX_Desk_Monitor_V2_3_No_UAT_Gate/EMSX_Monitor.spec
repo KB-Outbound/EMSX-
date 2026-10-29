@@ -47,6 +47,10 @@ asset = root / 'assets' / 'desk_alert.wav'
 if not asset.is_file():
     raise RuntimeError('경보음 파일이 없습니다')
 data += [(str(asset), 'assets')]
+market_asset = root / 'assets' / 'market_sessions.json'
+if not market_asset.is_file():
+    raise RuntimeError('시장 캘린더 파일이 없습니다')
+data.append((str(market_asset), 'assets'))
 for icon in (root / 'assets').glob('*.ico'):
     data.append((str(icon), 'assets'))
 icons = list((root / 'assets').glob('*.ico'))

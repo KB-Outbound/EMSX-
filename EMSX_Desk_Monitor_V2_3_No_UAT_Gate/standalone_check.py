@@ -69,6 +69,11 @@ def run_check(report: str) -> int:
             if source.getnframes() <= 0:
                 raise RuntimeError("경보음 데이터가 없습니다")
         result["경보음"] = "파일 해석 성공 · 실제 음향 재생은 별도 확인"
+        phase("시장 캘린더 해석")
+        from market_sessions import MarketCalendar
+
+        calendar = MarketCalendar.load()
+        result["시장 캘린더"] = f"{len(calendar.markets)}개 시장 · {calendar.source}"
         phase("Tk 종료")
         root.destroy()
         root = None

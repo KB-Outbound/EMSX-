@@ -15,7 +15,14 @@ from tkinter import ttk, filedialog, messagebox
 from bloomberg_feed import BloombergWorker
 from demo_feed import DemoWorker
 from desk_core import DeskBook, line_status
-from order_fields import recent_order, sort_orders, client_instruction, creation_fields
+from order_fields import (
+    recent_order,
+    sort_orders,
+    client_instruction,
+    creation_fields,
+    DESK_TIMEZONE,
+)
+from desk_utilities import OperationsMixin
 from alerting import AlertTracker, play_alarm
 from risk_rules import format_adv
 from resource_paths import asset_path
@@ -31,13 +38,13 @@ from kb_theme import (
     row_tags,
 )
 
-VERSION = "2.6.8"
+VERSION = "2.7.0"
 APP_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "EMSX_Desk_Monitor_HDGB"
 ADMIN_CONFIG = APP_DIR / "admin_config.json"
 LEDGER_PATH = APP_DIR / "ack_journal.sqlite3"
 
 
-class MonitorApp:
+class MonitorApp(OperationsMixin):
     def __init__(self, root: tk.Tk, environment: str = "PROD") -> None:
         self.root = root
         self.root.title(APP_TITLE)
@@ -46,7 +53,9 @@ class MonitorApp:
                 self.root.iconbitmap(default=str(asset_path("emsx_monitor.ico")))
             except tk.TclError:
                 pass
-        self.root.geometry("1330x790")
+        width = min(1330, max(1000, self.root.winfo_screenwidth() - 80))
+        height = min(930, max(650, self.root.winfo_screenheight() - 100))
+        self.root.geometry(f"{width}x{height}")
         self.root.minsize(1000, 650)
         self.messages = queue.Queue(maxsize=10000)
         self.commands = queue.Queue()
@@ -85,7 +94,10 @@ class MonitorApp:
             value="Order 0  |  Route 0  |  Unrouted 0  |  Alerts 0"
         )
         self.tabs = {}
+        self._init_operations(APP_DIR)
         self._make_ui()
+        self.journal.start()
+        self._load_market_calendar()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.root.after(250, self._pump)
 
@@ -98,6 +110,7 @@ class MonitorApp:
         ttk.Label(h, textvariable=self.environment_header, style="Header.TLabel").pack(
             side="left"
         )
+        self._make_market_panel(box)
         cfg = ttk.Frame(box)
         cfg.pack(fill="x", pady=(12, 8))
         ttk.Label(cfg, text="실행 환경").pack(side="left")
@@ -229,6 +242,9 @@ class MonitorApp:
                 ("fill_pct", "Fill %", 70),
                 ("line_status", "Line Status", 110),
                 ("instruction", "Instruction", 150),
+                ("market_code", "Market", 70),
+                ("market_status", "장 상태", 100),
+                ("market_warning", "휴장·장외 확인", 300),
                 ("brokers", "Brokers", 105),
                 ("routes", "Routes", 55),
                 ("warning", "Alerts", 240),
@@ -247,6 +263,9 @@ class MonitorApp:
                 ("line_status", "Line Status", 110),
                 ("instruction", "Instruction", 150),
                 ("iso_country", "ISO Country", 90),
+                ("market_code", "Market", 70),
+                ("market_status", "장 상태", 100),
+                ("market_warning", "휴장·장외 확인", 300),
                 ("sec_type", "Sec Type", 120),
                 ("adv_pct", "ADV (20D)", 100),
                 ("adv_reason", "ADV Check", 190),
@@ -412,10 +431,11 @@ class MonitorApp:
 
         return one(self.unrouted_min.get(), 5), one(self.nofill_min.get(), 15)
 
-    def _append(self, line):
+    def _append(self, line: str) -> None:
+        self._journal_event("Event Log", {"message": line})
         self.log_text.configure(state="normal")
         self.log_text.insert(
-            "end", datetime.now().strftime("%H:%M:%S") + " " + line + "\n"
+            "end", datetime.now(DESK_TIMEZONE).strftime("%H:%M:%S") + " " + line + "\n"
         )
         if int(self.log_text.index("end-1c").split(".")[0]) > 500:
             self.log_text.delete("1.0", "100.0")
@@ -433,6 +453,7 @@ class MonitorApp:
         ):
             return
         self.book = DeskBook()
+        self._seen_operational_alerts = {}
         self.messages = queue.Queue(maxsize=10000)
         self.commands = queue.Queue()
         self.ack_states = {}
@@ -474,6 +495,7 @@ class MonitorApp:
         self.status.set("모니터링 종료 중 / 자동 수신확인 해제")
 
     def close(self) -> None:
+        self._closing = True
         self.monitoring = False
         self.disarm_ack()
         if self.worker:
@@ -485,12 +507,28 @@ class MonitorApp:
         if self.worker and self.worker.is_alive():
             self.root.after(50, self._finish_close)
             return
+        if not self.messages.empty():
+            self.root.after(50, self._finish_close)
+            return
+        if not self._journal_close_requested:
+            self.journal.stop()
+            self._journal_close_requested = True
+        if (
+            self.journal.is_alive()
+            or self.journal.reporting
+            or (self.journal.report_thread and self.journal.report_thread.is_alive())
+            or (self.market_loader and self.market_loader.is_alive())
+        ):
+            self.root.after(50, self._finish_close)
+            return
         self.root.destroy()
 
     def show_config(self) -> None:
         messagebox.showinfo(
             "설정 파일 위치",
-            f"관리자 설정 파일:\n{ADMIN_CONFIG}\n진단 로그:\n{APP_DIR / 'feed_diagnostics.log'}\n\n기본값은 전송 차단입니다.\n검증과 전송 권한 확인 후 관리자가 BETA/PROD 전송을 허용해야 합니다.",
+            f"관리자 설정 파일:\n{ADMIN_CONFIG}\n진단 로그:\n{APP_DIR / 'feed_diagnostics.log'}\n"
+            f"데스크 일지:\n{APP_DIR / 'desk_journal.sqlite3'}\n시장별 로컬 지정:\n{APP_DIR / 'market_calendar_overrides.json'}\n\n"
+            "기본값은 전송 차단입니다.\n검증과 전송 권한 확인 후 관리자가 BETA/PROD 전송을 허용해야 합니다.",
         )
 
     def _arm_blockers(self) -> list[str]:
@@ -561,6 +599,7 @@ class MonitorApp:
     def _pump(self) -> None:
         deadline = time.monotonic() + 0.02
         try:
+            self._poll_utilities()
             for _ in range(2000):
                 if time.monotonic() >= deadline:
                     break
@@ -569,8 +608,11 @@ class MonitorApp:
                 except queue.Empty:
                     break
                 typ = m["type"]
+                if typ not in {"reference", "diagnostics"}:
+                    self._journal_event("수신:" + typ, m)
                 if typ == "reset":
                     self.book = DeskBook()
+                    self._seen_operational_alerts = {}
                     self.alert_tracker = AlertTracker()
                     self.feed_warning.set("")
                     self.unavailable_fields.clear()
@@ -745,11 +787,16 @@ class MonitorApp:
         if self.order_sort.get() == "Basket별 최신순":
             routes.sort(key=lambda row: row["basket_name"].casefold())
         stats = self.book.counters(rows, len(routes))
+        self._annotate_market_rows(rows, routes)
+        self._track_operational_events(rows)
         self._update_alarms(rows)
         missing_dates = sum(not row["trade_date"] for row in all_rows)
         missing_regions = sum(not row["iso_country"] for row in rows)
         self.counts.set(
-            f"Order {stats['orders']:,}  |  Route {stats['routes']:,}  |  Unrouted {stats['unrouted']:,}  |  Alerts {sum(bool(r['alert_types']) for r in rows):,}  |  Date Missing {missing_dates:,}  |  Region Missing {missing_regions:,}"
+            f"Order {stats['orders']:,}  |  Route {stats['routes']:,}  |  "
+            f"Unrouted {stats['unrouted']:,}  |  Alerts {sum(bool(r['alert_types']) for r in rows):,}  |  "
+            f"휴장·장외 확인 {sum(bool(r.get('market_warning')) for r in rows):,}  |  "
+            f"Date Missing {missing_dates:,}  |  Region Missing {missing_regions:,}"
         )
         p = self.book
 
@@ -795,7 +842,12 @@ class MonitorApp:
             for x in data:
                 if name != "Brokers" and basket not in x["basket_name"].casefold():
                     continue
-                if name == "Orders" and self.only_alerts.get() and not x["alert_types"]:
+                if (
+                    name == "Orders"
+                    and self.only_alerts.get()
+                    and not x["alert_types"]
+                    and not x.get("market_warning")
+                ):
                     continue
                 if (
                     account
@@ -833,7 +885,7 @@ class MonitorApp:
                 tags = row_tags(
                     idx,
                     item.get("line_status", ""),
-                    bool(item.get("warning")),
+                    bool(item.get("warning") or item.get("market_warning")),
                     bool(item.get("adv_check")),
                 )
                 if iid in stale:

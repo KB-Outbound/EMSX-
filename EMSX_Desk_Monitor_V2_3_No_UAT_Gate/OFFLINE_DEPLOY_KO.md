@@ -215,3 +215,25 @@ Route 지연과 No-Fill은 지정 12개 발행국 ISO 코드에만 적용하고,
 Instruction에 MOC가 포함되면 No-Fill 시각·음향 경고에서 제외합니다.
 시작 Event Log의 `버전 2.6.8`과 빌드 완료·독립 실행 검사 결과를 확인하십시오.
 총 184개 오프라인 테스트를 통과했으며 실제 Windows와 Bloomberg 응답은 별도 확인이 필요합니다.
+
+
+## 2.7.0 시장 상태·휴장·당일 Excel 보고서
+
+전체 소스와 `assets/market_sessions.json`을 교체한 뒤 기존 명령으로 재빌드합니다.
+
+```bat
+python windows_build.py build
+```
+
+Excel 파일 생성과 시간대 변환은 표준 라이브러리 및 배포 데이터만 사용합니다.
+기존 wheelhouse를 유지하며 새 패키지 다운로드·설치는 필요하지 않습니다.
+캘린더를 생성할 때만 쓰는 exchange_calendars·pandas·tzdata는 실행 파일의 런타임 의존성이 아닙니다.
+spec은 시장 일정 누락 시 빌드를 중단하고 완성 파일 자체 검사에서도 일정 해석을 확인합니다.
+
+새 저장 파일은 `%LOCALAPPDATA%\EMSX_Desk_Monitor_HDGB\desk_journal.sqlite3`입니다.
+기존 Ack 저널·감사는 보존하며 새로운 선택 설정은 `market_calendar_overrides.json`입니다.
+일지 저장 중인 SQLite·WAL은 정상 종료 후 기존 내부 보관 정책에 따라 보관하십시오.
+시장별 캘린더 지원 범위·미확인 처리·ADR 시장 지정·일일 보고서는 [운영 안내](OPERATIONS_KO.md)를 참조하십시오.
+
+시작 Event Log에서 버전 2.7.0과 빌드·독립 실행 검사 완료를 확인합니다.
+총 212개 테스트와 별도 Excel 리더 검증을 통과했으며 Windows 화면·실제 Excel·Bloomberg는 별도 확인이 필요합니다.
