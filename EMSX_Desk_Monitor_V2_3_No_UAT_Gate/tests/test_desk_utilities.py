@@ -9,8 +9,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 from alerting import AlertTracker
-from desk_core import DeskBook
+from desk_core import DeskBook, line_status
 from emsx_desk_monitor import MonitorApp
+from kb_theme import row_tags
 from market_sessions import MarketCalendar
 from order_fields import desk_today
 from test_trade_features import Variable
@@ -150,3 +151,125 @@ class TestDeskUtilities(unittest.TestCase):
         filled = {**row, "qty": 100, "remain": 0}
         app._annotate_market_rows([filled], [])
         self.assertEqual(filled["market_warning"], "")
+
+    def test_market_annotation_preserves_execution_highlights_in_both_tables(
+        self,
+    ) -> None:
+        app = MonitorApp.__new__(MonitorApp)
+        app.market_calendar = MarketCalendar.load()
+        app.market_statuses = {
+            "NL": app.market_calendar.status(
+                "NL", datetime.fromisoformat("2026-10-29T00:00:00+00:00")
+            )
+        }
+        for state, warning in (
+            ("PARTFILL", ""),
+            ("WORKING", "No-Fill Alert"),
+            ("CANCEL", ""),
+            ("NEW", ""),
+        ):
+            for adv in (True, False):
+                with self.subTest(state=state, adv=adv):
+                    order = {
+                        "seq": 1,
+                        "ticker": "TEST NL Equity",
+                        "iso_country": "NL",
+                        "status": state,
+                        "line_status": line_status(state),
+                        "warning": warning,
+                        "alert_types": (warning,) if warning else (),
+                        "adv_check": adv,
+                        "qty": 100,
+                        "remain": 100,
+                    }
+                    route = {**order, "route_id": 1}
+                    expected = row_tags(0, order["line_status"], bool(warning), adv)
+                    before = order.copy()
+                    app._annotate_market_rows([order], [route])
+                    for row in (order, route):
+                        self.assertEqual(row["market_warning"], "")
+                        self.assertEqual(row["market_status"], "장 종료")
+                        self.assertEqual(
+                            row_tags(
+                                0,
+                                row["line_status"],
+                                bool(row["warning"] or row["market_warning"]),
+                                adv,
+                            ),
+                            expected,
+                        )
+                        self.assertEqual({key: row[key] for key in before}, before)
+
+    def test_missing_calendar_clears_badge_and_retains_execution_alert(self) -> None:
+        app = MonitorApp.__new__(MonitorApp)
+        app.market_calendar = None
+        row = {
+            "seq": 1,
+            "status": "WORKING",
+            "iso_country": "JP",
+            "warning": "No-Fill Alert",
+            "alert_types": ("No-Fill Alert",),
+            "market_warning": "이전 안내",
+            "market_exchange": "XTKS",
+        }
+        app._annotate_market_rows([row], [])
+        self.assertEqual(row["market_status"], "확인 필요")
+        self.assertEqual(row["market_warning"], "")
+        self.assertEqual(row["market_exchange"], "")
+        self.assertEqual(row["alert_types"], ("No-Fill Alert",))
+
+    def test_real_no_fill_to_partial_fill_to_cancel_keeps_market_separate(
+        self,
+    ) -> None:
+        clock = [0.0]
+        book = DeskBook(now=lambda: clock[0])
+        for feed in ("O", "R"):
+            book.ingest(feed, 11, {})
+        book.update_reference("TEST JP Equity", {"iso_country": "JP"})
+        for feed, extra in (
+            ("O", {"EMSX_TICKER": "TEST JP Equity"}),
+            ("R", {"EMSX_ROUTE_ID": 1}),
+        ):
+            book.ingest(
+                feed,
+                6,
+                {
+                    "EMSX_SEQUENCE": 1,
+                    "EMSX_STATUS": "WORKING",
+                    "EMSX_AMOUNT": 100,
+                    "EMSX_FILLED": 0,
+                    **extra,
+                },
+            )
+        app = MonitorApp.__new__(MonitorApp)
+        app.market_calendar = MarketCalendar.load()
+        app.market_statuses = {
+            "JP": app.market_calendar.status(
+                "JP", datetime.fromisoformat("2026-10-29T09:00:00+00:00")
+            )
+        }
+        clock[0] = 1000.0
+        tracker = AlertTracker()
+        for status, filled, has_alarm in (
+            ("WORKING", 0, True),
+            ("PARTFILL", 30, False),
+            ("CANCEL", 30, False),
+        ):
+            for feed in ("O", "R"):
+                book.ingest(
+                    feed,
+                    7,
+                    {
+                        "EMSX_SEQUENCE": 1,
+                        "EMSX_ROUTE_ID": 1,
+                        "EMSX_STATUS": status,
+                        "EMSX_FILLED": filled,
+                    },
+                )
+            orders, routes = book.full_view(1, 1), book.route_view()
+            original = orders[0].copy()
+            app._annotate_market_rows(orders, routes)
+            self.assertEqual({key: orders[0][key] for key in original}, original)
+            self.assertEqual(orders[0]["market_warning"], "")
+            self.assertEqual(routes[0]["market_warning"], "")
+            self.assertEqual(tracker.update(orders, True), has_alarm)

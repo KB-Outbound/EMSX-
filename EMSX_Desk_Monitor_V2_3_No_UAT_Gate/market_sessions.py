@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from desk_core import TERMINAL
 from order_fields import DESK_TIMEZONE
 from resource_paths import asset_path
 
@@ -16,7 +17,7 @@ STATE_LABELS = {
     "Open": "개장",
     "Pre-Market": "장전",
     "Lunch": "점심",
-    "Closed": "장외",
+    "Closed": "장 종료",
     "Holiday": "휴장",
     "Unknown": "확인 필요",
 }
@@ -32,6 +33,8 @@ STATE_COLORS = {
 
 @dataclass(frozen=True)
 class MarketStatus:
+    """현재 장 구간과 달력에서 확인된 휴장 여부를 별도로 보존한다."""
+
     code: str
     exchange: str
     state: str
@@ -39,6 +42,18 @@ class MarketStatus:
     kst_time: str
     detail: str
     upcoming_holiday: str = ""
+    is_non_trading_day: bool = False
+
+
+def market_warning_eligible(row: dict[str, Any]) -> bool:
+    """종료 주문만 제외하며 체결 경고를 시장 상태의 근거로 사용하지 않는다."""
+    for key in ("status", "line_status"):
+        state = str(row.get(key) or "").strip().upper()
+        state = state.replace(" ", "").replace("-", "").replace("_", "")
+        if state in TERMINAL:
+            return False
+    qty = row.get("qty")
+    return not (isinstance(qty, (int, float)) and qty > 0 and row.get("remain") == 0)
 
 
 class MarketCalendar:
@@ -274,6 +289,7 @@ class MarketCalendar:
             kst,
             market["name"] + " · " + detail,
             upcoming,
+            is_non_trading_day=row is not None and not row["segments"],
         )
 
     def order_market(
@@ -282,20 +298,23 @@ class MarketCalendar:
         statuses: dict[str, MarketStatus],
         active: bool = True,
     ) -> dict[str, str]:
+        """실행 상태를 보존하고 달력으로 확인된 휴장 안내만 추가한다."""
         code = self.security_markets.get(str(row.get("ticker", "")).strip().casefold())
-        basis = "종목별 지정" if code else "발행국 대표시장"
+        basis = "종목별 지정" if code else "발행국 ISO"
         code = code or str(row.get("iso_country", ""))
         status = statuses.get(code)
         state = status.state if status else "Unknown"
         warning = ""
-        if active and state in {"Holiday", "Closed", "Unknown", "Lunch"}:
-            reason = {
-                "Holiday": "금일 휴장일 확인 필요",
-                "Closed": "장외·비거래일 확인 필요",
-                "Unknown": "캘린더 확인 필요",
-                "Lunch": "점심 휴장 확인 필요",
-            }[state]
-            warning = f"⚠ [{code or '미확인'}] {reason} ({basis})"
+        # 장 종료·장전·점심·일정 누락은 휴장 근거가 아니다.
+        # 수량·체결·기존 경고와 별도로 달력에서 확인한 휴장일만 안내한다.
+        if (
+            active
+            and market_warning_eligible(row)
+            and status is not None
+            and status.is_non_trading_day
+            and state in {"Holiday", "Closed"}
+        ):
+            warning = f"⚠ [{code}] 금일 휴장일 확인 필요"
         return {
             "market_code": code,
             "market_status": STATE_LABELS[state],

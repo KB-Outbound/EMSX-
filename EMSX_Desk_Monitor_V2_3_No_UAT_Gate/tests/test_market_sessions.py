@@ -6,6 +6,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 import tempfile
+from typing import Any
 import unittest
 
 from desk_utilities import MARKET_CODES
@@ -174,6 +175,111 @@ class TestMarketSessions(unittest.TestCase):
         self.assertEqual(
             self.calendar.order_market(row, statuses, active=False)["market_warning"],
             "",
+        )
+
+    def test_clock_closure_and_calendar_holiday_are_distinct(self) -> None:
+        cases = (
+            ("US", "2026-10-29T00:00:00+00:00", "Closed", False),
+            ("NL", "2026-10-29T00:00:00+00:00", "Closed", False),
+            ("JP", "2026-10-29T03:00:00+00:00", "Lunch", False),
+            ("US", "2026-07-06T12:50:00+00:00", "Pre-Market", False),
+            ("US", "2026-11-26T15:00:00+00:00", "Holiday", True),
+            ("US", "2026-10-31T15:00:00+00:00", "Closed", True),
+            ("VN", "2026-10-29T02:00:00+00:00", "Unknown", False),
+        )
+        for code, instant, state, closed_day in cases:
+            with self.subTest(code=code, instant=instant):
+                status = self.calendar.status(code, datetime.fromisoformat(instant))
+                self.assertEqual(status.state, state)
+                self.assertEqual(status.is_non_trading_day, closed_day)
+                market = self.calendar.order_market(
+                    {"iso_country": code, "status": "NEW"}, {code: status}
+                )
+                self.assertEqual(bool(market["market_warning"]), closed_day)
+                if state == "Closed":
+                    self.assertEqual(market["market_status"], "장 종료")
+
+    def test_execution_states_do_not_create_session_warning_or_change_fields(
+        self,
+    ) -> None:
+        cases = (
+            ("US", "2026-10-29T00:00:00+00:00"),
+            ("NL", "2026-10-29T00:00:00+00:00"),
+            ("JP", "2026-10-29T03:00:00+00:00"),
+            ("VN", "2026-10-29T02:00:00+00:00"),
+        )
+        for code, instant in cases:
+            status = self.calendar.status(code, datetime.fromisoformat(instant))
+            for execution in (
+                "NEW",
+                "WORKING",
+                "PARTFILL",
+                "Partial fill",
+                "No fill",
+                "Cancel",
+            ):
+                for alerts in ((), ("No-Fill Alert",), ("Unrouted Warning",)):
+                    with self.subTest(code=code, execution=execution, alerts=alerts):
+                        row = {
+                            "iso_country": code,
+                            "status": execution,
+                            "alert_types": alerts,
+                            "warning": " / ".join(alerts),
+                            "qty": 100,
+                            "filled": 40 if execution == "PARTFILL" else 0,
+                            "remain": 60 if execution == "PARTFILL" else 100,
+                        }
+                        before = row.copy()
+                        market = self.calendar.order_market(row, {code: status})
+                        self.assertEqual(market["market_warning"], "")
+                        self.assertEqual(row, before)
+
+    def test_cancel_variants_and_completed_quantities_suppress_holiday_badge(
+        self,
+    ) -> None:
+        status = self.calendar.status(
+            "JP", datetime.fromisoformat("2026-01-01T01:00:00+00:00")
+        )
+        base: dict[str, Any] = {
+            "iso_country": "JP",
+            "qty": 100,
+            "remain": 100,
+            "status": "NEW",
+        }
+        cases: list[dict[str, Any]] = [
+            {"status": state}
+            for state in (
+                "CANCEL",
+                " Cancel ",
+                "cancelled",
+                "Canceled",
+                "FILLED",
+                "COMPLETED",
+                "EXPIRED",
+                "Rejected",
+                "DELETED",
+            )
+        ]
+        cases.extend(
+            [
+                {"status": "", "line_status": "Cancel"},
+                {"status": None, "line_status": "Completed"},
+                {"status": "NEW", "remain": 0},
+            ]
+        )
+        for fields in cases:
+            with self.subTest(fields=fields):
+                market = self.calendar.order_market({**base, **fields}, {"JP": status})
+                self.assertEqual(market["market_warning"], "")
+
+    def test_confirmed_holiday_warning_is_short_and_has_no_basis_suffix(self) -> None:
+        status = self.calendar.status(
+            "JP", datetime.fromisoformat("2026-01-01T01:00:00+00:00")
+        )
+        row = {"ticker": "TEST JP Equity", "iso_country": "JP", "status": "NEW"}
+        self.assertEqual(
+            self.calendar.order_market(row, {"JP": status})["market_warning"],
+            "⚠ [JP] 금일 휴장일 확인 필요",
         )
 
     def test_asset_is_included_in_standalone_build(self) -> None:

@@ -15,7 +15,6 @@ from typing import Any
 
 from daily_report import ReportRequest
 from diagnostics import LOGGER
-from desk_core import TERMINAL
 from desk_journal import DeskJournal
 from kb_theme import SURFACE, GOLD, MUTED
 from market_sessions import MarketCalendar, MarketStatus, STATE_LABELS, STATE_COLORS
@@ -270,19 +269,15 @@ class OperationsMixin:
         if not hasattr(self, "market_calendar"):
             return
         for row in [*rows, *routes]:
-            active = str(row.get("status", "")).upper() not in TERMINAL
-            if row.get("qty", 0) > 0 and row.get("remain") == 0:
-                active = False
             if self.market_calendar is not None:
-                row.update(
-                    self.market_calendar.order_market(row, self.market_statuses, active)
-                )
+                row.update(self.market_calendar.order_market(row, self.market_statuses))
             else:
                 row.update(
                     market_code=row.get("iso_country", ""),
                     market_status="확인 필요",
-                    market_warning="캘린더 확인 필요" if active else "",
+                    market_warning="",
                     market_basis="미확인",
+                    market_exchange="",
                 )
 
     def _track_operational_events(self, rows: list[dict[str, Any]]) -> None:

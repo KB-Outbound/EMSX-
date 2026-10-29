@@ -38,7 +38,7 @@ from kb_theme import (
     row_tags,
 )
 
-VERSION = "2.7.0"
+VERSION = "2.7.1"
 APP_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "EMSX_Desk_Monitor_HDGB"
 ADMIN_CONFIG = APP_DIR / "admin_config.json"
 LEDGER_PATH = APP_DIR / "ack_journal.sqlite3"
@@ -244,7 +244,7 @@ class MonitorApp(OperationsMixin):
                 ("instruction", "Instruction", 150),
                 ("market_code", "Market", 70),
                 ("market_status", "장 상태", 100),
-                ("market_warning", "휴장·장외 확인", 300),
+                ("market_warning", "휴장 확인", 300),
                 ("brokers", "Brokers", 105),
                 ("routes", "Routes", 55),
                 ("warning", "Alerts", 240),
@@ -265,7 +265,7 @@ class MonitorApp(OperationsMixin):
                 ("iso_country", "ISO Country", 90),
                 ("market_code", "Market", 70),
                 ("market_status", "장 상태", 100),
-                ("market_warning", "휴장·장외 확인", 300),
+                ("market_warning", "휴장 확인", 300),
                 ("sec_type", "Sec Type", 120),
                 ("adv_pct", "ADV (20D)", 100),
                 ("adv_reason", "ADV Check", 190),
@@ -795,7 +795,7 @@ class MonitorApp(OperationsMixin):
         self.counts.set(
             f"Order {stats['orders']:,}  |  Route {stats['routes']:,}  |  "
             f"Unrouted {stats['unrouted']:,}  |  Alerts {sum(bool(r['alert_types']) for r in rows):,}  |  "
-            f"휴장·장외 확인 {sum(bool(r.get('market_warning')) for r in rows):,}  |  "
+            f"휴장 확인 {sum(bool(r.get('market_warning')) for r in rows):,}  |  "
             f"Date Missing {missing_dates:,}  |  Region Missing {missing_regions:,}"
         )
         p = self.book
