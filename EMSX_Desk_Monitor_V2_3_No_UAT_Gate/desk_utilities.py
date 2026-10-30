@@ -16,8 +16,8 @@ from typing import Any
 from daily_report import ReportRequest
 from diagnostics import LOGGER
 from desk_journal import DeskJournal
-from kb_theme import SURFACE, GOLD, MUTED
-from market_sessions import MarketCalendar, MarketStatus, STATE_LABELS, STATE_COLORS
+from kb_theme import SURFACE, MUTED, TEXT, DANGER
+from market_sessions import MarketCalendar, MarketStatus, STATE_LABELS
 from order_fields import DESK_TIMEZONE, desk_today, recent_order
 
 MARKET_CODES = (
@@ -69,70 +69,67 @@ class OperationsMixin:
         self._journal_close_requested = False
 
     def _make_market_panel(self, parent: ttk.Frame) -> None:
-        panel = ttk.LabelFrame(
-            parent, text="주요 시장 · 정규장 참고 상태", padding=(6, 3)
-        )
-        panel.pack(fill="x", pady=(6, 2))
-        controls = ttk.Frame(panel)
-        controls.pack(fill="x")
-        self.market_clock = tk.StringVar(value="KST 시각 확인 중")
-        ttk.Label(controls, textvariable=self.market_clock, foreground=GOLD).pack(
-            side="left"
-        )
+        """메인에는 시장 요약만 두고 상세 목록은 요청할 때 생성한다."""
+        self.market_clock = tk.StringVar(value="--:-- KST")
         self.market_selection = tk.StringVar(value="US")
+        self.market_summary = tk.StringVar(value="시장 확인 중")
+        self.market_detail = tk.StringVar()
+        self.utility_state = tk.StringVar(value="일지·캘린더 준비 중")
+        self.market_badges: dict[str, ttk.Label] = {}
+        self.market_window: tk.Toplevel | None = None
+        self.market_button = ttk.Button(
+            parent, textvariable=self.market_summary, command=self._show_market_status
+        )
+        self.market_button.grid(row=0, column=2)
+        ttk.Label(parent, textvariable=self.market_clock, style="Muted.TLabel").grid(
+            row=0, column=3, padx=(10, 0)
+        )
+
+    def _show_market_status(self) -> None:
+        if self.market_window is not None and self.market_window.winfo_exists():
+            self.market_window.deiconify()
+            self.market_window.lift()
+            return
+        window = tk.Toplevel(self.root)
+        self.market_window = window
+        window.title("시장 운영 상태")
+        window.transient(self.root)
+        window.geometry("860x360")
+        window.minsize(680, 320)
+        window.protocol("WM_DELETE_WINDOW", window.withdraw)
+        panel = ttk.Frame(window, padding=12)
+        panel.pack(fill="both", expand=True)
+        controls = ttk.Frame(panel)
+        controls.pack(fill="x", pady=(0, 10))
+        ttk.Label(controls, text="정규장 일정").pack(side="left")
         ttk.Combobox(
             controls,
             textvariable=self.market_selection,
             values=MARKET_CODES,
             width=5,
             state="readonly",
-        ).pack(side="left", padx=6)
-        self.report_button = ttk.Button(
-            controls, text="당일 일지/로그 내보내기", command=self.export_daily_report
+        ).pack(side="left", padx=8)
+        ttk.Button(controls, text="새로고침", command=self._load_market_calendar).pack(
+            side="right"
         )
-        self.report_button.pack(side="right")
-        ttk.Button(controls, text="메모 작성", command=self.add_trader_note).pack(
-            side="right", padx=4
-        )
-        ttk.Button(
-            controls, text="캘린더 새로고침", command=self._load_market_calendar
-        ).pack(side="right", padx=4)
         badges = ttk.Frame(panel)
-        badges.pack(fill="x", pady=3)
-        self.market_badges: dict[str, tk.Label] = {}
+        badges.pack(fill="x")
+        self.market_badges.clear()
         for index, code in enumerate(MARKET_CODES):
-            label = tk.Label(
-                badges,
-                text=f"● {code} 확인 --:--",
-                bg=SURFACE,
-                fg=MUTED,
-                font=("맑은 고딕", 9),
-                padx=3,
-                pady=2,
-                cursor="hand2",
-                anchor="w",
+            label = ttk.Label(
+                badges, text=f"{code} 확인", padding=(5, 6), cursor="hand2"
             )
-            label.grid(row=index // 9, column=index % 9, sticky="ew", padx=1, pady=1)
+            label.grid(row=index // 6, column=index % 6, sticky="ew", padx=1, pady=1)
             label.bind(
                 "<Button-1>",
                 lambda event, selected=code: self.market_selection.set(selected),
             )
-            badges.columnconfigure(index % 9, weight=1)
+            badges.columnconfigure(index % 6, weight=1)
             self.market_badges[code] = label
-        self.market_detail = tk.StringVar()
         ttk.Label(
-            panel,
-            textvariable=self.market_detail,
-            style="Muted.TLabel",
-            wraplength=900,
-        ).pack(anchor="w")
-        self.utility_state = tk.StringVar(value="일지·캘린더 준비 중")
-        ttk.Label(
-            panel,
-            textvariable=self.utility_state,
-            style="Muted.TLabel",
-            wraplength=900,
-        ).pack(anchor="w")
+            panel, textvariable=self.market_detail, style="Muted.TLabel", wraplength=800
+        ).pack(anchor="w", pady=(12, 0))
+        self._update_market_panel(force=True)
 
     def _load_market_calendar(self) -> None:
         if self.market_loader and self.market_loader.is_alive():
@@ -164,9 +161,7 @@ class OperationsMixin:
             kind = message["type"]
             if kind == "market_ready":
                 self.market_calendar = message["calendar"]
-                self._calendar_message = (
-                    "로컬 캘린더 · 대표시장 참고 · 장전=정규장 전 60분 준비 구간"
-                )
+                self._calendar_message = "시장 일정 적용"
                 self._market_tick = 0.0
             elif kind == "market_error":
                 self.market_calendar = None
@@ -217,9 +212,7 @@ class OperationsMixin:
             return
         self._market_tick = tick
         now = datetime.now(timezone.utc)
-        self.market_clock.set(
-            now.astimezone(DESK_TIMEZONE).strftime("KST %Y-%m-%d %H:%M:%S")
-        )
+        self.market_clock.set(now.astimezone(DESK_TIMEZONE).strftime("%H:%M:%S KST"))
         calendar = self.market_calendar
         if calendar is not None:
             try:
@@ -238,8 +231,26 @@ class OperationsMixin:
                 status.local_time[11:16] if status and status.local_time else "--:--"
             )
             badge.configure(
-                text=f"● {code} {STATE_LABELS[state]} {clock}", fg=STATE_COLORS[state]
+                text=f"{code} {STATE_LABELS[state]} {clock}",
+                foreground=DANGER
+                if state == "Holiday"
+                else TEXT
+                if state == "Open"
+                else MUTED,
             )
+        opened = sum(status.state == "Open" for status in self.market_statuses.values())
+        unknown = sum(
+            code not in self.market_statuses
+            or self.market_statuses[code].state == "Unknown"
+            for code in MARKET_CODES
+        )
+        self.market_summary.set(
+            "시장 확인 필요"
+            if unknown == len(MARKET_CODES)
+            else f"시장 개장 {opened} · 미확인 {unknown}"
+            if unknown
+            else f"시장 개장 {opened}/{len(MARKET_CODES)}"
+        )
         selected = self.market_statuses.get(self.market_selection.get())
         if selected:
             self.market_detail.set(
@@ -340,7 +351,7 @@ class OperationsMixin:
         author = tk.StringVar(value=os.getenv("USERNAME", ""))
         ttk.Entry(frame, textvariable=author).pack(fill="x")
         text = tk.Text(
-            frame, width=72, height=10, bg=SURFACE, fg="white", insertbackground=GOLD
+            frame, width=72, height=10, bg=SURFACE, fg=TEXT, insertbackground=TEXT
         )
         text.pack(fill="both", expand=True, pady=8)
 

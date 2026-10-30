@@ -10,7 +10,7 @@ from pathlib import Path
 import queue
 import time
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import filedialog, messagebox
 
 from bloomberg_feed import BloombergWorker
 from demo_feed import DemoWorker
@@ -23,29 +23,23 @@ from order_fields import (
     DESK_TIMEZONE,
 )
 from desk_utilities import OperationsMixin
-from desk_tables import PinnedTreeview, ROUTE_COLUMNS
+from desk_tables import PinnedTreeview
+from desk_layout import DeskLayoutMixin
 from alerting import AlertTracker, play_alarm
 from risk_rules import format_adv
 from resource_paths import asset_path
 from ack_engine import load_config, eligibility, write_authorized
 
 from ui_text import APP_TITLE, DESK_TITLE, localize
-from kb_theme import (
-    BACKGROUND,
-    TEXT,
-    GOLD,
-    apply_theme,
-    configure_rows,
-    row_tags,
-)
+from kb_theme import row_tags
 
-VERSION = "2.7.2"
+VERSION = "2.8.0"
 APP_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "EMSX_Desk_Monitor_HDGB"
 ADMIN_CONFIG = APP_DIR / "admin_config.json"
 LEDGER_PATH = APP_DIR / "ack_journal.sqlite3"
 
 
-class MonitorApp(OperationsMixin):
+class MonitorApp(DeskLayoutMixin, OperationsMixin):
     def __init__(self, root: tk.Tk, environment: str = "PROD") -> None:
         self.root = root
         self.root.title(APP_TITLE)
@@ -102,270 +96,6 @@ class MonitorApp(OperationsMixin):
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.root.after(250, self._pump)
 
-    def _make_ui(self) -> None:
-        apply_theme(self.root)
-        box = ttk.Frame(self.root, padding=12)
-        box.pack(fill="both", expand=True)
-        h = ttk.Frame(box)
-        h.pack(fill="x")
-        ttk.Label(h, textvariable=self.environment_header, style="Header.TLabel").pack(
-            side="left"
-        )
-        self._make_market_panel(box)
-        cfg = ttk.Frame(box)
-        cfg.pack(fill="x", pady=(12, 8))
-        ttk.Label(cfg, text="실행 환경").pack(side="left")
-        self.env_ctrl = ttk.Combobox(
-            cfg,
-            textvariable=self.env,
-            values=["DEMO", "BETA", "PROD"],
-            width=8,
-            state="readonly",
-        )
-        self.env_ctrl.pack(side="left", padx=5)
-        ttk.Label(cfg, text="구독 팀").pack(side="left", padx=(12, 0))
-        self.team_ctrl = ttk.Entry(cfg, textvariable=self.team, width=22)
-        self.team_ctrl.pack(side="left", padx=5)
-        self.start_btn = ttk.Button(
-            cfg, text="모니터링 시작", command=self.start, style="Primary.TButton"
-        )
-        self.start_btn.pack(side="left", padx=(12, 4))
-        self.stop_btn = ttk.Button(
-            cfg, text="모니터링 중지", command=self.stop, state="disabled"
-        )
-        self.stop_btn.pack(side="left", padx=4)
-        ttk.Button(cfg, text="현재 탭 CSV 저장", command=self.export).pack(side="right")
-        self.status_badge = ttk.Label(
-            box, textvariable=self.status, style="Badge.TLabel"
-        )
-        self.status_badge.pack(anchor="w", pady=(4, 2))
-        self.alert_badge = ttk.Label(
-            box, textvariable=self.alert_summary, style="Badge.TLabel"
-        )
-        self.alert_badge.pack(anchor="w", pady=(0, 2))
-        ttk.Label(box, textvariable=self.feed_state, style="Muted.TLabel").pack(
-            anchor="w", pady=(2, 0)
-        )
-        ttk.Label(box, textvariable=self.feed_warning, style="Muted.TLabel").pack(
-            anchor="w"
-        )
-        ttk.Separator(box).pack(fill="x", pady=8)
-        ttk.Label(
-            box, textvariable=self.counts, style="Metric.TLabel", wraplength=1000
-        ).pack(anchor="w", pady=(0, 8))
-        filt = ttk.Frame(box)
-        filt.pack(fill="x", pady=(0, 8))
-        ttk.Label(filt, text="검색").pack(side="left")
-        ttk.Entry(filt, textvariable=self.search, width=24).pack(side="left", padx=5)
-        ttk.Label(filt, text="Account 검색").pack(side="left", padx=(10, 0))
-        ttk.Entry(filt, textvariable=self.account_filter, width=17).pack(
-            side="left", padx=5
-        )
-        ttk.Label(filt, text="Broker 검색").pack(side="left", padx=(10, 0))
-        ttk.Entry(filt, textvariable=self.broker_filter, width=12).pack(
-            side="left", padx=5
-        )
-        ttk.Checkbutton(
-            filt, text="Alerts만 표시 (Route)", variable=self.only_alerts
-        ).pack(side="left", padx=12)
-        scope = ttk.Frame(box)
-        scope.pack(fill="x", pady=(0, 8))
-        ttk.Label(scope, text="Create Time (Trade Date)").pack(side="left")
-        ttk.Combobox(
-            scope,
-            textvariable=self.date_filter,
-            values=["오늘·전일", "오늘"],
-            width=10,
-            state="readonly",
-        ).pack(side="left", padx=6)
-        ttk.Label(scope, text="Basket Name 검색").pack(side="left", padx=(12, 0))
-        ttk.Entry(scope, textvariable=self.basket_filter, width=22).pack(
-            side="left", padx=6
-        )
-        ttk.Label(scope, text="정렬").pack(side="left", padx=(12, 0))
-        ttk.Combobox(
-            scope,
-            textvariable=self.order_sort,
-            values=["최신순", "과거순", "Basket별 최신순"],
-            width=17,
-            state="readonly",
-        ).pack(side="left", padx=6)
-        options = ttk.Frame(box)
-        options.pack(fill="x", pady=(0, 8))
-        ttk.Label(options, text="ADV 기준").pack(side="left", padx=(8, 0))
-        ttk.Combobox(
-            options,
-            textvariable=self.adv_period,
-            values=["20D", "5D"],
-            width=5,
-            state="readonly",
-        ).pack(side="left", padx=4)
-        ttk.Checkbutton(options, text="알림음", variable=self.sound_enabled).pack(
-            side="left", padx=8
-        )
-        ttk.Button(options, text="알림음 확인", command=self._test_alarm).pack(
-            side="right"
-        )
-        ttk.Label(
-            options, text="ADV = Route 수량 / 평균 거래량 × 100", style="Muted.TLabel"
-        ).pack(side="left", padx=12)
-        x = ttk.Frame(box)
-        x.pack(fill="x", pady=(0, 6))
-        ttk.Label(x, text="FIX 수신 후 라우트 미실행 (Route 지연, 분)").pack(
-            side="left"
-        )
-        ttk.Entry(x, textvariable=self.unrouted_min, width=5).pack(side="left", padx=5)
-        ttk.Label(x, text="라우트 완료 후 체결 대기 (No-Fill 정체, 분)").pack(
-            side="left", padx=(15, 0)
-        )
-        ttk.Entry(x, textvariable=self.nofill_min, width=5).pack(side="left", padx=5)
-        ttk.Label(
-            box,
-            text=(
-                "※ Route 지연·No-Fill: 지정 12개 발행국 ISO 기준 · "
-                "MOC 포함 시 No-Fill 제외 · FIX 수신: EMSX 상태 판정 · 관측 시간 기준"
-            ),
-            foreground=GOLD,
-            wraplength=950,
-        ).pack(anchor="w", pady=(0, 6))
-        nb = ttk.Notebook(box)
-        nb.pack(fill="both", expand=True)
-        spec = {
-            "Routes": ROUTE_COLUMNS,
-            "Brokers": [
-                ("broker", "Broker", 150),
-                ("routes", "Routes", 100),
-                ("routed", "Routed Qty", 140),
-                ("filled", "Filled Qty", 140),
-                ("remaining", "Remaining", 140),
-                ("fill_pct", "Fill %", 110),
-            ],
-        }
-        for label, columns in spec.items():
-            frame = ttk.Frame(nb, padding=3)
-            nb.add(frame, text=label)
-            frame.rowconfigure(0, weight=1)
-            frame.columnconfigure(0, weight=1)
-            if label == "Routes":
-                tree = PinnedTreeview(frame, columns)
-                tree.grid(row=0, column=0, sticky="nsew")
-                self.tabs[label] = {"columns": [c[0] for c in columns], "tree": tree}
-                continue
-            tree = ttk.Treeview(
-                frame,
-                columns=[col[0] for col in columns],
-                show="headings",
-                selectmode="browse",
-            )
-            for key, head, width in columns:
-                tree.heading(key, text=head)
-                tree.column(
-                    key,
-                    width=width,
-                    minwidth=min(width, 80),
-                    anchor="e"
-                    if key
-                    in (
-                        "qty",
-                        "filled",
-                        "remain",
-                        "fill_pct",
-                        "routed",
-                        "remaining",
-                        "routes",
-                        "route_id",
-                        "adv_pct",
-                        "avg_price",
-                    )
-                    else "w",
-                    stretch=True,
-                )
-            configure_rows(tree)
-            sb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
-            horizontal = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
-            tree.configure(yscrollcommand=sb.set, xscrollcommand=horizontal.set)
-            tree.grid(row=0, column=0, sticky="nsew")
-            sb.grid(row=0, column=1, sticky="ns")
-            horizontal.grid(row=1, column=0, sticky="ew")
-            self.tabs[label] = {"columns": [c[0] for c in columns], "tree": tree}
-        ack_frame = ttk.Frame(nb, padding=8)
-        nb.add(ack_frame, text="자동 수신확인(Ack)")
-        ttk.Label(
-            ack_frame,
-            text="활성화 이후 새로 수신한 E2E ORD-PEND Order만 자동 수신확인합니다. "
-            "기존 Order는 처리하지 않습니다.",
-            foreground=GOLD,
-            wraplength=1100,
-        ).pack(anchor="w")
-        h2 = ttk.Frame(ack_frame)
-        h2.pack(fill="x", pady=8)
-        ttk.Label(h2, textvariable=self.arm_state, style="Badge.TLabel").pack(
-            side="left", padx=(0, 18)
-        )
-        self.arm_btn = ttk.Button(
-            h2,
-            text="자동 Ack",
-            command=self.arm_ack,
-            state="disabled",
-            style="Primary.TButton",
-        )
-        self.arm_btn.pack(side="left", padx=4)
-        self.disarm_btn = ttk.Button(
-            h2, text="자동 수신확인 해제", command=self.disarm_ack, state="disabled"
-        )
-        self.disarm_btn.pack(side="left", padx=4)
-        ttk.Label(
-            ack_frame,
-            textvariable=self.arm_blocker,
-            foreground=GOLD,
-            wraplength=1150,
-        ).pack(anchor="w", pady=(0, 8))
-        ttk.Button(h2, text="활성화 조건 확인", command=self.show_arm_diagnostics).pack(
-            side="right", padx=(0, 12)
-        )
-        ttk.Button(h2, text="설정 파일 위치", command=self.show_config).pack(
-            side="right"
-        )
-        acols = [
-            ("create_time", "Create Time", 165),
-            ("basket_name", "Basket Name", 140),
-            ("account", "Account", 165),
-            ("ticker", "Ticker", 172),
-            ("side", "Side", 75),
-            ("qty", "Shares", 100),
-            ("line_status", "Line Status", 115),
-            ("instruction", "Instruction", 150),
-            ("ack_state", "Ack 처리 상태", 220),
-            ("ack_detail", "사유 / 응답", 300),
-        ]
-        ack_table = ttk.Frame(ack_frame)
-        ack_table.pack(fill="both", expand=True)
-        ack_table.rowconfigure(0, weight=1)
-        ack_table.columnconfigure(0, weight=1)
-        self.ack_tree = PinnedTreeview(ack_table, acols)
-        self.ack_tree.grid(row=0, column=0, sticky="nsew")
-        activity = ttk.Frame(nb, padding=3)
-        nb.add(activity, text="Event Log")
-        log = tk.Text(
-            activity,
-            height=12,
-            wrap="word",
-            font=("맑은 고딕", 10),
-            state="disabled",
-            background=BACKGROUND,
-            foreground=TEXT,
-            insertbackground=GOLD,
-            selectbackground="#51451E",
-            relief="flat",
-        )
-        log.pack(fill="both", expand=True)
-        self.log_text = log
-        self.nb = nb
-        footer = ttk.Frame(box)
-        footer.pack(fill="x", pady=(8, 0))
-        ttk.Label(footer, textvariable=self.environment_header).pack(side="right")
-        self._last_render = 0.0
-
     def _thresholds(self):
         def one(x, default):
             try:
@@ -410,7 +140,7 @@ class MonitorApp(OperationsMixin):
             messagebox.showerror("관리자 설정 오류", str(e))
             return
         if not team:
-            messagebox.showerror("구독 팀 입력 필요", "Enter the tested 구독 팀 HDGB.")
+            messagebox.showerror("구독 팀 입력 필요", "구독 팀을 입력하십시오.")
             return
         self.worker = (
             DemoWorker(self.messages)
@@ -666,11 +396,7 @@ class MonitorApp(OperationsMixin):
             f"Unrouted Warning {unrouted} | No-Fill Alert {nofill} | Alerts {total}"
         )
         self.alert_badge.configure(
-            style=(
-                "Danger.Badge.TLabel"
-                if total and int(time.monotonic()) % 2 == 0
-                else "Badge.TLabel"
-            )
+            style="Risk.Badge.TLabel" if total else "Badge.TLabel"
         )
         audio_ready = (
             self.sound_enabled.get()
@@ -873,6 +599,7 @@ class MonitorApp(OperationsMixin):
         )
         self.disarm_btn.configure(state="normal" if self.armed else "disabled")
         self._render_acks()
+        self._refresh_desk_status(rows, routes, stats)
 
     def _render_acks(self) -> None:
         pending = []

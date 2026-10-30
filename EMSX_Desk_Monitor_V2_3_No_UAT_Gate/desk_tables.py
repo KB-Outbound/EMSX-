@@ -15,16 +15,16 @@ IDENTITY_COLUMNS = ("account", "ticker")
 ROUTE_COLUMNS: tuple[ColumnSpec, ...] = (
     ("account", "Account", 180),
     ("ticker", "Ticker", 220),
+    ("basket_name", "Basket Name", 120),
+    ("side", "Side", 48),
+    ("qty", "Shares", 82),
+    ("instruction", "Instruction", 118),
+    ("line_status", "Line Status", 90),
+    ("adv_pct", "ADV (20D)", 80),
     ("broker", "Broker", 80),
-    ("side", "Side", 62),
-    ("qty", "Route Qty", 90),
     ("filled", "Fill", 85),
     ("remain", "Remain", 85),
-    ("line_status", "Line Status", 110),
-    ("instruction", "Instruction", 150),
-    ("adv_pct", "ADV (20D)", 100),
     ("warning", "Alerts", 240),
-    ("basket_name", "Basket Name", 140),
     ("create_time", "Create Time", 165),
     ("route_id", "Route#", 66),
     ("iso_country", "ISO Country", 90),
@@ -35,6 +35,17 @@ ROUTE_COLUMNS: tuple[ColumnSpec, ...] = (
     ("adv_reason", "ADV Check", 190),
     ("avg_price", "Avg Price", 90),
     ("parent_visible", "상위 Order 확인", 98),
+)
+
+ROUTE_PRIMARY_COLUMNS = (
+    "account",
+    "ticker",
+    "basket_name",
+    "side",
+    "qty",
+    "instruction",
+    "line_status",
+    "adv_pct",
 )
 
 NUMERIC_COLUMNS = {
@@ -54,7 +65,13 @@ NUMERIC_COLUMNS = {
 class PinnedTreeview(ttk.Frame):
     """두 표의 행·선택·세로 이동을 일치시키고 식별 열의 축소를 방지한다."""
 
-    def __init__(self, parent: tk.Misc, columns: Sequence[ColumnSpec]) -> None:
+    def __init__(
+        self,
+        parent: tk.Misc,
+        columns: Sequence[ColumnSpec],
+        primary_columns: Sequence[str] | None = None,
+        additional_columns: Sequence[str] = (),
+    ) -> None:
         super().__init__(parent)
         self.column_keys = tuple(column[0] for column in columns)
         if not set(IDENTITY_COLUMNS).issubset(self.column_keys):
@@ -63,6 +80,22 @@ class PinnedTreeview(ttk.Frame):
             key for key in self.column_keys if key not in IDENTITY_COLUMNS
         )
         self._indices = {key: index for index, key in enumerate(self.column_keys)}
+        self._primary_columns = tuple(primary_columns or self.column_keys)
+        if not set(self._primary_columns).issubset(self.column_keys):
+            raise ValueError("거래 표의 기본 열 구성이 올바르지 않습니다")
+        self._compact = primary_columns is not None
+        self._primary_detail_keys = tuple(
+            key for key in self._primary_columns if key not in IDENTITY_COLUMNS
+        )
+        self._primary_width = sum(
+            width for key, _, width in columns if key in self._primary_detail_keys
+        )
+        self._base_widths = {key: width for key, _, width in columns}
+        self._additional_columns = tuple(additional_columns)
+        if not set(self._additional_columns).issubset(self.detail_keys):
+            raise ValueError("거래 표의 추가 열 구성이 올바르지 않습니다")
+        self._details_enabled = not self._compact
+        self._reserved_width = self._primary_width
         self._values: dict[str, tuple[Any, ...]] = {}
         self._width_cache: dict[str, int] = {}
         self._syncing = False
@@ -90,7 +123,12 @@ class PinnedTreeview(ttk.Frame):
             tree.column(
                 key,
                 width=self._minimum.get(key, width),
-                minwidth=self._minimum.get(key, min(width, 60)),
+                minwidth=self._minimum.get(
+                    key,
+                    width
+                    if key in self._primary_detail_keys and self._compact
+                    else min(width, 60),
+                ),
                 stretch=False,
                 anchor="e" if key in NUMERIC_COLUMNS else "w",
             )
@@ -119,16 +157,56 @@ class PinnedTreeview(ttk.Frame):
         self.fixed.bind("<Double-1>", self._protect_identity)
         self.fixed.bind("<Motion>", self._hover_cell)
         self.fixed.bind("<Leave>", self._destroy_tooltip)
+        self.set_detail_columns(not self._compact)
+
+    def set_detail_columns(self, enabled: bool) -> None:
+        """기본 거래 열과 전체 상세 열 사이를 전환하며 원본 행은 보존한다."""
+        self._details_enabled = enabled
+        compact = self._compact and not self._details_enabled
+        for key in ("basket_name", "instruction"):
+            if key in self.detail_keys:
+                self.details.column(key, stretch=compact)
+        self.details.xview_moveto(0)
+        self._choose_columns(self.winfo_width())
+        self._fit_identity(self.winfo_width())
+
+    def _choose_columns(self, width: int) -> None:
+        """기본 식별 열을 확보한 뒤 여유 폭에 체결·Broker 열을 더한다."""
+        keys = self.detail_keys
+        self._reserved_width = self._primary_width
+        if self._compact and not self._details_enabled:
+            chosen = list(self._primary_detail_keys)
+            available = (
+                width - sum(self._minimum.values()) - self.scroll_y.winfo_reqwidth() - 8
+            )
+            for key in self._additional_columns:
+                cost = self._base_widths[key]
+                if self._reserved_width + cost > available:
+                    break
+                chosen.append(key)
+                self._reserved_width += cost
+            keys = tuple(chosen)
+        if tuple(self.details["displaycolumns"]) != keys:
+            if self._compact and not self._details_enabled:
+                # 이전 창 폭에서 늘어난 열 너비가 추가 열의 공간을 침범하지 않게 한다.
+                for key in keys:
+                    self.details.column(key, width=self._base_widths[key])
+            self.details.configure(displaycolumns=keys)
 
     def _tree(self, key: str) -> ttk.Treeview:
         return self.fixed if key in IDENTITY_COLUMNS else self.details
 
     def _resize(self, event: tk.Event) -> None:
+        self._choose_columns(event.width)
         self._fit_identity(event.width)
 
     def _fit_identity(self, width: int) -> None:
         # 스크롤바·테두리를 제외하고 상세 열에도 최소 표시 공간을 남긴다.
-        reserve = 300 + self.scroll_y.winfo_reqwidth() + 8
+        reserve = (
+            (self._reserved_width if self._compact else 300)
+            + self.scroll_y.winfo_reqwidth()
+            + 8
+        )
         spare = max(0, width - reserve - sum(self._minimum.values()))
         extras = {
             key: self._desired[key] - self._minimum[key] for key in IDENTITY_COLUMNS

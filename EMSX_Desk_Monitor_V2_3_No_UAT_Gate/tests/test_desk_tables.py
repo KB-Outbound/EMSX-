@@ -229,4 +229,6 @@ class TestMonitorTabs(unittest.TestCase):
                     self.assertIsInstance(app.ack_tree, PinnedTreeview)
                     app._closing = True
         finally:
+            for timer in root.tk.call("after", "info"):
+                root.after_cancel(timer)
             root.destroy()

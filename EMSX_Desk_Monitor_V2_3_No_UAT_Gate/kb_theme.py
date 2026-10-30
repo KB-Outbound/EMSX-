@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, font as tkfont
+import sys
 
 BACKGROUND = "#121212"
 SURFACE = "#1E1E1E"
@@ -19,39 +20,51 @@ def apply_theme(root: tk.Tk) -> None:
     """운영체제 기본 테마 대신 일관된 차콜·금색 스타일을 적용한다."""
     style = ttk.Style(root)
     style.theme_use("clam")
+    families = set(tkfont.families(root))
+    candidates = (
+        ("맑은 고딕", "Malgun Gothic")
+        if sys.platform == "win32"
+        else ("Noto Sans CJK KR", "Noto Sans KR", "NanumGothic")
+    )
+    family = next(
+        (name for name in candidates if name in families),
+        tkfont.nametofont("TkDefaultFont").actual("family"),
+    )
+    body_font = tkfont.Font(root=root, family=family, size=9)
     root.configure(background=BACKGROUND)
     style.configure(
         ".",
         background=BACKGROUND,
         foreground=TEXT,
-        font=("맑은 고딕", 10),
+        font=(family, 9),
         bordercolor=BORDER,
         lightcolor=BORDER,
         darkcolor=BORDER,
     )
     style.configure("TFrame", background=BACKGROUND)
     style.configure("TLabel", background=BACKGROUND)
-    style.configure("Header.TLabel", font=("맑은 고딕", 16, "bold"))
-    style.configure(
-        "Metric.TLabel", foreground=GOLD, font=("맑은 고딕", 12, "bold"), padding=(0, 8)
-    )
+    style.configure("Header.TLabel", font=(family, 11, "bold"))
+    style.configure("Connection.TLabel", foreground=MUTED, padding=(0, 0))
+    style.configure("Error.Connection.TLabel", foreground=DANGER)
+    style.configure("Metric.TLabel", foreground=TEXT, font=(family, 9), padding=0)
     style.configure(
         "Badge.TLabel",
-        background=SURFACE,
-        foreground=GOLD,
-        padding=(10, 5),
-        font=("맑은 고딕", 10, "bold"),
+        background=BACKGROUND,
+        foreground=MUTED,
+        padding=0,
+        font=(family, 9),
     )
     style.configure("Danger.Badge.TLabel", foreground=DANGER)
+    style.configure("Risk.Badge.TLabel", foreground=GOLD)
     style.configure("Muted.TLabel", foreground=MUTED)
     style.configure(
         "TButton",
         background=SURFACE_ALT,
         foreground=TEXT,
-        padding=(12, 8),
+        padding=(9, 4),
         borderwidth=1,
         focusthickness=1,
-        focuscolor=GOLD,
+        focuscolor=BORDER,
     )
     style.map(
         "TButton",
@@ -61,13 +74,13 @@ def apply_theme(root: tk.Tk) -> None:
             ("active", "#303030"),
         ],
         foreground=[("disabled", "#757575")],
-        bordercolor=[("focus", GOLD)],
+        bordercolor=[("focus", MUTED)],
     )
     style.configure(
         "Primary.TButton",
         background=GOLD,
         foreground=BACKGROUND,
-        font=("맑은 고딕", 10, "bold"),
+        font=(family, 9, "bold"),
         bordercolor=GOLD,
     )
     style.map(
@@ -81,21 +94,29 @@ def apply_theme(root: tk.Tk) -> None:
         bordercolor=[("disabled", BORDER), ("!disabled", GOLD)],
     )
     style.configure(
-        "TEntry", fieldbackground=SURFACE, foreground=TEXT, insertcolor=GOLD, padding=6
+        "Active.TButton", foreground=GOLD, background="#2C281A", bordercolor=GOLD
     )
-    style.map("TEntry", bordercolor=[("focus", GOLD)])
+    style.map(
+        "Active.TButton",
+        foreground=[("!disabled", GOLD)],
+        background=[("active", "#393221")],
+    )
+    style.configure(
+        "TEntry", fieldbackground=SURFACE, foreground=TEXT, insertcolor=TEXT, padding=4
+    )
+    style.map("TEntry", bordercolor=[("focus", MUTED)])
     style.configure(
         "TCombobox",
         fieldbackground=SURFACE,
         foreground=TEXT,
-        arrowcolor=GOLD,
-        padding=5,
+        arrowcolor=MUTED,
+        padding=3,
     )
     style.map(
         "TCombobox",
         fieldbackground=[("readonly", SURFACE)],
         foreground=[("disabled", MUTED), ("readonly", TEXT)],
-        bordercolor=[("focus", GOLD)],
+        bordercolor=[("focus", MUTED)],
     )
     style.configure(
         "TCheckbutton", indicatorbackground=SURFACE, indicatorforeground=GOLD, padding=4
@@ -106,37 +127,28 @@ def apply_theme(root: tk.Tk) -> None:
         indicatorbackground=[("selected", GOLD)],
         indicatorforeground=[("selected", BACKGROUND)],
     )
-    style.configure("TNotebook", background=BACKGROUND, borderwidth=0)
-    style.configure(
-        "TNotebook.Tab", background=SURFACE, foreground=MUTED, padding=(16, 9)
-    )
-    style.map(
-        "TNotebook.Tab",
-        background=[("selected", GOLD), ("active", SURFACE_ALT)],
-        foreground=[("selected", BACKGROUND), ("active", TEXT)],
-    )
     style.configure(
         "Treeview",
-        rowheight=32,
+        rowheight=max(26, body_font.metrics("linespace") + 8),
         background=SURFACE,
         fieldbackground=SURFACE,
         foreground=TEXT,
         borderwidth=1,
         relief="solid",
-        font=("맑은 고딕", 10),
+        font=(family, 9),
     )
     style.configure(
         "Treeview.Heading",
         background=SURFACE_ALT,
-        foreground=GOLD,
-        padding=(10, 9),
-        font=("맑은 고딕", 10, "bold"),
+        foreground=TEXT,
+        padding=(6, 5),
+        font=(family, 9, "bold"),
         relief="flat",
     )
     style.map("Treeview.Heading", background=[("active", "#303030")])
     style.map(
         "Treeview",
-        background=[("selected", "#51451E")],
+        background=[("selected", "#353B42")],
         foreground=[("selected", "#FFFFFF")],
     )
     style.configure("TSeparator", background=BORDER)
@@ -149,22 +161,25 @@ def apply_theme(root: tk.Tk) -> None:
     )
     root.option_add("*TCombobox*Listbox.background", SURFACE)
     root.option_add("*TCombobox*Listbox.foreground", TEXT)
-    root.option_add("*TCombobox*Listbox.selectBackground", GOLD)
-    root.option_add("*TCombobox*Listbox.selectForeground", BACKGROUND)
+    root.option_add("*TCombobox*Listbox.selectBackground", "#353B42")
+    root.option_add("*TCombobox*Listbox.selectForeground", TEXT)
 
 
 def configure_rows(tree: ttk.Treeview) -> None:
     """교차 행과 경고·실행 상태의 표시 우선순위를 정의한다."""
     tree.tag_configure("even", background=SURFACE)
     tree.tag_configure("odd", background=SURFACE_ALT)
-    tree.tag_configure("working", foreground=GOLD)
+    tree.tag_configure("working", foreground=TEXT)
     tree.tag_configure("terminal", foreground=MUTED)
     tree.tag_configure("alert", background="#3B301A", foreground="#FFE58A")
+    family = tkfont.Font(
+        root=tree, font=ttk.Style(tree).lookup("Treeview", "font")
+    ).actual("family")
     tree.tag_configure(
         "adv",
         background="#4A3B00",
         foreground="#FFE46B",
-        font=("맑은 고딕", 10, "bold"),
+        font=(family, 9, "bold"),
     )
     tree.tag_configure("danger", background="#3B2020", foreground=DANGER)
 
