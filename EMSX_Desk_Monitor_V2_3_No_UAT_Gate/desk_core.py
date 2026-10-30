@@ -20,6 +20,7 @@ from risk_rules import (
     adv_check,
 )
 from order_fields import client_instruction, creation_fields, sort_orders
+from dividend_rules import parse_ex_date
 
 TERMINAL = {
     "FILLED",
@@ -250,7 +251,7 @@ class DeskBook:
 
     @synchronized
     def invalidate_reference(self) -> None:
-        """참조 서비스 단절 시 국가·ADV를 미확인으로 되돌린다."""
+        """참조 서비스 단절 시 국가·ADV·배당락일을 미확인으로 되돌린다."""
         self.reference.clear()
 
     @synchronized
@@ -265,10 +266,22 @@ class DeskBook:
         values = {
             name: value
             for name, value in fields.items()
-            if name in {"iso_country", "sec_type", "avg_volume_5d", "avg_volume_20d"}
+            if name
+            in {
+                "iso_country",
+                "sec_type",
+                "avg_volume_5d",
+                "avg_volume_20d",
+                "dividend_ex_date",
+            }
         }
         if "iso_country" in values:
             values["iso_country"] = country_code(values["iso_country"])
+        if "dividend_ex_date" in values:
+            parsed = parse_ex_date(values["dividend_ex_date"])
+            values["dividend_ex_date"] = (
+                parsed.isoformat() if parsed is not None else None
+            )
         self.reference.setdefault(key, {}).update(values)
 
     @synchronized
@@ -354,6 +367,7 @@ class DeskBook:
                     "line_status": line_status(f.get("EMSX_STATUS")),
                     "instruction": instruction,
                     "iso_country": iso_country,
+                    "dividend_ex_date": text(metadata.get("dividend_ex_date")),
                     "basket_name": text(f.get("EMSX_BASKET_NAME")),
                     **creation_fields(f),
                     "brokers": ",".join(broker_codes),

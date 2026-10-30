@@ -19,6 +19,7 @@ from desk_journal import DeskJournal
 from kb_theme import SURFACE, MUTED, TEXT, DANGER
 from market_sessions import MarketCalendar, MarketStatus, STATE_LABELS
 from order_fields import DESK_TIMEZONE, desk_today, recent_order
+from dividend_rules import DIVIDEND_ALERT
 
 MARKET_CODES = (
     "US",
@@ -299,6 +300,8 @@ class OperationsMixin:
             kinds = [*row.get("alert_types", ())]
             if row.get("market_warning"):
                 kinds.append(row["market_warning"])
+            if row.get("dividend_risk"):
+                kinds.append(DIVIDEND_ALERT)
             for kind in kinds:
                 key = (row["seq"], kind)
                 current[key] = {
@@ -309,6 +312,13 @@ class OperationsMixin:
                     "instruction": row["instruction"],
                     "iso_country": row["iso_country"],
                 }
+                if kind == DIVIDEND_ALERT:
+                    current[key].update(
+                        dividend_ex_date=row["dividend_ex_date"],
+                        session_date=row["dividend_session_date"],
+                        qty=row["qty"],
+                        target_date=row["dividend_target_date"],
+                    )
                 if key not in self._seen_operational_alerts:
                     self._journal_event("Alert 표시 시작", current[key])
         for key, previous in self._seen_operational_alerts.items():
@@ -319,7 +329,7 @@ class OperationsMixin:
     def add_trader_note(self) -> None:
         selected = None
         tab = self.nb.tab(self.nb.select(), "text")
-        if tab == "Routes":
+        if tab in {"Routes", "배당 확인"}:
             choice = self.tabs[tab]["tree"].selection()
             if choice:
                 try:

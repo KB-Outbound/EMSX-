@@ -292,6 +292,23 @@ class MarketCalendar:
             is_non_trading_day=row is not None and not row["segments"],
         )
 
+    def next_business_date(self, code: str, after: date) -> date | None:
+        """지정 날짜 다음부터 확인된 거래일을 찾고 일정 누락 시 추정하지 않는다."""
+        market = self.markets.get(code)
+        if market is None:
+            return None
+        for shift in range(1, 367):
+            try:
+                candidate = after + timedelta(days=shift)
+            except OverflowError:
+                return None
+            row = market["days"].get(candidate.isoformat())
+            if row is None:
+                return None
+            if row["segments"]:
+                return candidate
+        return None
+
     def order_market(
         self,
         row: dict[str, Any],

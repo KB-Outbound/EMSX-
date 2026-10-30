@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from datetime import date, datetime
 from typing import Any
 import unittest
 from unittest.mock import Mock
@@ -96,6 +97,7 @@ class TestReferenceData(unittest.TestCase):
             "HS007": "VOLUME_AVG_20D",
             "DS290": "COUNTRY_ISO",
             "DS213": "SECURITY_TYP",
+            "DV018": "DVD_EX_DT",
         }
         self.feed.handle_response(
             Message(
@@ -142,6 +144,7 @@ class TestReferenceData(unittest.TestCase):
         self.assertEqual(request.name, "ReferenceDataRequest")
         self.assertEqual(request.fields["securities"], ["TEST JP Equity"])
         self.assertIn("VOLUME_AVG_20D", request.fields["fields"])
+        self.assertIn("DVD_EX_DT", request.fields["fields"])
         self.assertGreaterEqual(cid, 1000000)
 
     def test_partial_responses_finish_after_all_messages(self) -> None:
@@ -158,6 +161,80 @@ class TestReferenceData(unittest.TestCase):
         self.assertEqual(result["iso_country"], "HK")
         self.assertEqual(result["avg_volume_20d"], 20000)
         self.assertEqual(result["sec_type"], "Common Stock")
+
+    def test_dividend_native_dates_and_invalid_values_are_isolated(self) -> None:
+        for value, expected in (
+            (date(2026, 11, 2), "2026-11-02"),
+            (datetime(2026, 11, 2, 0, 0), "2026-11-02"),
+            ("20261102", "2026-11-02"),
+            (None, None),
+            ("2026-02-30", None),
+            (True, None),
+        ):
+            with self.subTest(value=value):
+                self.setUp()
+                self.prepare()
+                response = self.data("US")
+                response["securityData"][0]["fieldData"]["DVD_EX_DT"] = value
+                self.feed.handle_response(
+                    Message(response, self.feed.pending[0]), final=True
+                )
+                fields = self.emitted[-1][1]["fields"]
+                self.assertEqual(fields["dividend_ex_date"], expected)
+                self.assertEqual(fields["iso_country"], "US")
+                self.assertEqual(fields["avg_volume_20d"], 20000)
+
+    def test_dividend_field_exception_clears_prior_partial_value(self) -> None:
+        self.prepare()
+        cid = self.feed.pending[0]
+        response = self.data("US")
+        response["securityData"][0]["fieldData"]["DVD_EX_DT"] = date(2026, 11, 2)
+        self.feed.handle_response(Message(response, cid), final=False)
+        response = {
+            "securityData": [
+                {
+                    "security": "TEST JP Equity",
+                    "fieldExceptions": [
+                        {
+                            "fieldId": "DVD_EX_DT",
+                            "errorInfo": {"code": 1, "message": "권한 없음"},
+                        }
+                    ],
+                }
+            ]
+        }
+        with self.assertLogs("emsx", "WARNING"):
+            self.feed.handle_response(Message(response, cid), final=True)
+        fields = self.emitted[-1][1]["fields"]
+        self.assertIsNone(fields["dividend_ex_date"])
+        self.assertEqual(fields["iso_country"], "US")
+
+    def test_dividend_mnemonic_is_verified_and_not_added_to_emsx_subscription(
+        self,
+    ) -> None:
+        from bloomberg_feed import ORDER_FIELDS, ROUTE_FIELDS
+
+        self.feed.handle_response(
+            Message(
+                {
+                    "fieldData": [
+                        {"id": "DV018", "fieldInfo": {"mnemonic": "DVD_PAY_DT"}}
+                    ]
+                },
+                FIELD_INFO_CID,
+            ),
+            final=True,
+        )
+        self.assertNotIn("DV018", self.feed.mnemonics)
+        self.assertTrue(self.warn.called)
+        self.assertNotIn("DVD_EX_DT", ORDER_FIELDS)
+        self.assertNotIn("DVD_EX_DT", ROUTE_FIELDS)
+
+    def test_dividend_timeout_does_not_retain_previous_ex_date(self) -> None:
+        self.prepare()
+        self.clock[0] = 21
+        self.feed.tick()
+        self.assertIsNone(self.emitted[-1][1]["fields"]["dividend_ex_date"])
 
     def test_unverified_percentage_field_is_not_treated_as_volume(self) -> None:
         self.feed.handle_response(

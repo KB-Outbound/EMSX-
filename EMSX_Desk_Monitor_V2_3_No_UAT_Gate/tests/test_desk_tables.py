@@ -221,10 +221,17 @@ class TestMonitorTabs(unittest.TestCase):
                     root.update()
                     labels = [app.nb.tab(tab, "text") for tab in app.nb.tabs()]
                     self.assertEqual(
-                        labels, ["Routes", "Brokers", "자동 수신확인(Ack)", "Event Log"]
+                        labels,
+                        [
+                            "Routes",
+                            "Brokers",
+                            "자동 수신확인(Ack)",
+                            "배당 확인",
+                            "Event Log",
+                        ],
                     )
                     self.assertEqual(app.nb.tab(app.nb.select(), "text"), "Routes")
-                    self.assertEqual(set(app.tabs), {"Routes", "Brokers"})
+                    self.assertEqual(set(app.tabs), {"Routes", "Brokers", "배당 확인"})
                     self.assertIsInstance(app.tabs["Routes"]["tree"], PinnedTreeview)
                     self.assertIsInstance(app.ack_tree, PinnedTreeview)
                     app._closing = True

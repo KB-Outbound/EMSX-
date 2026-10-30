@@ -269,3 +269,17 @@ python windows_build.py build
 상태 바의 환경·연결 상태와 우측 시장 배지, 보기 메뉴·설정 창을 확인하십시오.
 시작 Event Log의 `버전 2.8.0`과 `빌드·독립 실행 검사 완료` 출력을 확인합니다.
 총 235개 테스트와 Linux Tk 화면 검증을 통과했으며 실제 Windows 실행 파일은 대상 PC 확인이 필요합니다.
+
+## 2.9.0 미국 T+2 배당 확인 적용
+
+새 `dividend_rules.py`를 포함한 전체 소스·기존 자산을 교체하고 실행합니다.
+
+```bat
+python windows_build.py build
+```
+
+기존 설정·Ack DB·일지·wheelhouse를 보존하며 새 패키지 다운로드·설치는 필요하지 않습니다.
+다음 영업일은 번들에 포함된 NYSE 일정으로 계산합니다. 시작 시 외부 웹 달력을 조회하지 않습니다.
+배당락일 자체는 Bloomberg 연결 후 기존 참조데이터 서비스의 `DVD_EX_DT` 권한·응답을 사용합니다.
+시작 Event Log의 `버전 2.9.0`과 `빌드·독립 실행 검사 완료` 출력을 확인하십시오.
+총 255개 테스트와 Linux Tk DEMO를 검증했으며 실제 Windows·Bloomberg 확인은 대상 PC에서 수행합니다.

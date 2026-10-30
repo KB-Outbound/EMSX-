@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
+from functools import partial
 from typing import Any
 
 from desk_tables import PinnedTreeview, ROUTE_COLUMNS, ROUTE_PRIMARY_COLUMNS
+from dividend_rules import DIVIDEND_COLUMNS
 from kb_theme import BACKGROUND, TEXT, configure_rows, apply_theme
 
 
@@ -94,7 +96,10 @@ class DeskLayoutMixin:
             state="disabled",
         )
         self.arm_btn.pack(side="left", padx=(0, 12))
-        selector = ttk.Menubutton(self.toolbar, textvariable=self.view_name)
+        self.workspace_tabs = ttk.Frame(self.toolbar)
+        self.workspace_tabs.pack(side="left", padx=(0, 4))
+        self.tab_buttons: dict[str, ttk.Radiobutton] = {}
+        selector = ttk.Menubutton(self.toolbar, text="보기")
         selector.pack(side="left", padx=(0, 4))
         self.view_menu = tk.Menu(selector, tearoff=False)
         selector.configure(menu=self.view_menu)
@@ -148,10 +153,21 @@ class DeskLayoutMixin:
         self._make_views()
         for page in self.nb.tabs():
             label = self.nb.tab(page, "text")
-            self.view_menu.add_command(
-                label="자동 Ack" if label == "자동 수신확인(Ack)" else label,
-                command=lambda selected=page: self.nb.select(selected),
-            )
+            display = "자동 Ack" if label == "자동 수신확인(Ack)" else label
+            command = partial(self.nb.select, page)
+            if label in {"Routes", "자동 수신확인(Ack)", "배당 확인"}:
+                button = ttk.Radiobutton(
+                    self.workspace_tabs,
+                    text=display,
+                    value=display,
+                    variable=self.view_name,
+                    command=command,
+                    style="Workspace.Tab.TRadiobutton",
+                )
+                button.pack(side="left", padx=1)
+                self.tab_buttons[label] = button
+            else:
+                self.view_menu.add_command(label=display, command=command)
         self.view_menu.add_separator()
         self.view_menu.add_checkbutton(
             label="상세 열 표시",
@@ -250,6 +266,47 @@ class DeskLayoutMixin:
             ),
         )
         self.ack_tree.pack(fill="both", expand=True)
+        dividend = ttk.Frame(self.nb)
+        self.nb.add(dividend, text="배당 확인")
+        dividend_table = ttk.Treeview(
+            dividend,
+            columns=[column[0] for column in DIVIDEND_COLUMNS],
+            show="headings",
+            selectmode="browse",
+        )
+        for key, label, width in DIVIDEND_COLUMNS:
+            dividend_table.heading(key, text=label)
+            dividend_table.column(
+                key,
+                width=width,
+                minwidth=width,
+                stretch=key in {"account", "ticker", "instruction", "basket_name"},
+                anchor="e" if key == "qty" else "w",
+            )
+        configure_rows(dividend_table)
+        scroll_y = ttk.Scrollbar(
+            dividend, orient="vertical", command=dividend_table.yview
+        )
+        scroll_x = ttk.Scrollbar(
+            dividend, orient="horizontal", command=dividend_table.xview
+        )
+        dividend_table.configure(
+            yscrollcommand=lambda first, last: self._set_grid_scrollbar(
+                scroll_y, first, last
+            ),
+            xscrollcommand=lambda first, last: self._set_grid_scrollbar(
+                scroll_x, first, last
+            ),
+        )
+        dividend.rowconfigure(0, weight=1)
+        dividend.columnconfigure(0, weight=1)
+        dividend_table.grid(row=0, column=0, sticky="nsew")
+        scroll_y.grid(row=0, column=1, sticky="ns")
+        scroll_x.grid(row=1, column=0, sticky="ew")
+        self.tabs["배당 확인"] = {
+            "columns": [column[0] for column in DIVIDEND_COLUMNS],
+            "tree": dividend_table,
+        }
         log_frame = ttk.Frame(self.nb)
         self.nb.add(log_frame, text="Event Log")
         self.log_text = tk.Text(
@@ -269,6 +326,14 @@ class DeskLayoutMixin:
         self.log_text.configure(yscrollcommand=log_scroll.set)
         log_scroll.pack(side="right", fill="y")
         self.log_text.pack(fill="both", expand=True)
+
+    @staticmethod
+    def _set_grid_scrollbar(bar: ttk.Scrollbar, first: str, last: str) -> None:
+        bar.set(first, last)
+        if float(first) <= 0.0 and float(last) >= 1.0:
+            bar.grid_remove()
+        else:
+            bar.grid()
 
     def _make_settings(self) -> None:
         self.settings_window = tk.Toplevel(self.root)
@@ -427,6 +492,7 @@ class DeskLayoutMixin:
         nofill = sum("No-Fill Alert" in row["alert_types"] for row in rows)
         adv = sum(bool(row.get("adv_check")) for row in routes)
         holidays = sum(bool(row.get("market_warning")) for row in rows)
+        dividends = sum(bool(row.get("dividend_risk")) for row in rows)
         other = sum(
             bool(set(row["alert_types"]) - {"Unrouted Warning", "No-Fill Alert"})
             for row in rows
@@ -438,6 +504,7 @@ class DeskLayoutMixin:
                 ("No-Fill", nofill),
                 ("ADV", adv),
                 ("휴장", holidays),
+                ("배당", dividends),
                 ("Alerts", other),
             )
             if count
@@ -447,6 +514,16 @@ class DeskLayoutMixin:
             style="Risk.Badge.TLabel" if risks else "Badge.TLabel"
         )
         problem = "일지 기록 오류" if self.journal.error else ""
+        if (
+            not problem
+            and getattr(self, "dividend_target_date", None) is None
+            and any(
+                row.get("iso_country") == "US"
+                and "T+2" in row.get("instruction", "").upper()
+                for row in rows
+            )
+        ):
+            problem = "배당 일정 확인"
         self.operation_notice.set(problem)
         if problem:
             self.notice_button.pack(side="right")

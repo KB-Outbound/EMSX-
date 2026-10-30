@@ -63,7 +63,11 @@ class TestDailyReport(unittest.TestCase):
             req.audit_path.write_text(
                 json.dumps(audit, ensure_ascii=False) + "\n", encoding="utf-8"
             )
-            req = replace(req, audit_size=req.audit_path.stat().st_size)
+            req = replace(
+                req,
+                audit_size=req.audit_path.stat().st_size,
+                orders=[{"seq": 1, "dividend_ex_date": "2026-11-02"}],
+            )
             events = [
                 {
                     "id": 1,
@@ -89,6 +93,9 @@ class TestDailyReport(unittest.TestCase):
                 self.assertEqual(len(workbook.findall("x:sheets/x:sheet", NS)), 7)
             self.assertIn("고객 MOC 확인", sheet_rows(req.path, 6)[1])
             self.assertIn("[1, 2, 3]", sheet_rows(req.path, 5)[1])
+            order_rows = sheet_rows(req.path, 2)
+            position = order_rows[0].index("Dividend Ex Date")
+            self.assertEqual(order_rows[1][position], "2026-11-02")
 
     def test_audit_filter_uses_kst_day_environment_team_and_byte_cutoff(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

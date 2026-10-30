@@ -57,6 +57,20 @@ def apply_theme(root: tk.Tk) -> None:
     style.configure("Danger.Badge.TLabel", foreground=DANGER)
     style.configure("Risk.Badge.TLabel", foreground=GOLD)
     style.configure("Muted.TLabel", foreground=MUTED)
+    style.layout("Workspace.Tab.TRadiobutton", style.layout("TButton"))
+    style.configure(
+        "Workspace.Tab.TRadiobutton",
+        background=BACKGROUND,
+        foreground=MUTED,
+        padding=(8, 4),
+        bordercolor=BACKGROUND,
+    )
+    style.map(
+        "Workspace.Tab.TRadiobutton",
+        background=[("selected", SURFACE_ALT), ("active", SURFACE)],
+        foreground=[("selected", TEXT), ("active", TEXT)],
+        bordercolor=[("selected", BORDER)],
+    )
     style.configure(
         "TButton",
         background=SURFACE_ALT,
@@ -158,6 +172,18 @@ def apply_theme(root: tk.Tk) -> None:
         troughcolor=BACKGROUND,
         arrowcolor=MUTED,
         borderwidth=0,
+        lightcolor=BORDER,
+        darkcolor=BORDER,
+        bordercolor=BORDER,
+    )
+    style.map(
+        "TScrollbar",
+        background=[
+            ("disabled", SURFACE),
+            ("pressed", "#494949"),
+            ("active", "#353535"),
+        ],
+        arrowcolor=[("disabled", "#555555")],
     )
     root.option_add("*TCombobox*Listbox.background", SURFACE)
     root.option_add("*TCombobox*Listbox.foreground", TEXT)
@@ -182,6 +208,9 @@ def configure_rows(tree: ttk.Treeview) -> None:
         font=(family, 9, "bold"),
     )
     tree.tag_configure("danger", background="#3B2020", foreground=DANGER)
+    tree.tag_configure(
+        "dividend", background="#4A2D18", foreground="#FFE1A3", font=(family, 9, "bold")
+    )
 
 
 def row_tags(

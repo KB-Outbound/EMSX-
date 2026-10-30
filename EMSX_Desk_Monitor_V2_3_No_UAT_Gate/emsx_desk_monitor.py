@@ -11,6 +11,7 @@ import queue
 import time
 import tkinter as tk
 from tkinter import filedialog, messagebox
+import order_fields
 
 from bloomberg_feed import BloombergWorker
 from demo_feed import DemoWorker
@@ -25,6 +26,7 @@ from order_fields import (
 from desk_utilities import OperationsMixin
 from desk_tables import PinnedTreeview
 from desk_layout import DeskLayoutMixin
+from dividend_rules import dividend_view
 from alerting import AlertTracker, play_alarm
 from risk_rules import format_adv
 from resource_paths import asset_path
@@ -33,7 +35,7 @@ from ack_engine import load_config, eligibility, write_authorized
 from ui_text import APP_TITLE, DESK_TITLE, localize
 from kb_theme import row_tags
 
-VERSION = "2.8.0"
+VERSION = "2.9.0"
 APP_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "EMSX_Desk_Monitor_HDGB"
 ADMIN_CONFIG = APP_DIR / "admin_config.json"
 LEDGER_PATH = APP_DIR / "ack_journal.sqlite3"
@@ -89,12 +91,13 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
             value="Order 0  |  Route 0  |  Unrouted 0  |  Alerts 0"
         )
         self.tabs = {}
+        self._ui_destroyed = False
         self._init_operations(APP_DIR)
         self._make_ui()
         self.journal.start()
         self._load_market_calendar()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
-        self.root.after(250, self._pump)
+        self._pump_after = self.root.after(250, self._pump)
 
     def _thresholds(self):
         def one(x, default):
@@ -143,7 +146,7 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
             messagebox.showerror("구독 팀 입력 필요", "구독 팀을 입력하십시오.")
             return
         self.worker = (
-            DemoWorker(self.messages)
+            DemoWorker(self.messages, include_dividends=True)
             if env == "DEMO"
             else BloombergWorker(
                 env, team, self.messages, self.commands, self.admin_config, LEDGER_PATH
@@ -169,6 +172,8 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
         self.status.set("모니터링 종료 중 / 자동 수신확인 해제")
 
     def close(self) -> None:
+        if self._closing:
+            return
         self._closing = True
         self.monitoring = False
         self.disarm_ack()
@@ -195,6 +200,11 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
         ):
             self.root.after(50, self._finish_close)
             return
+        self._ui_destroyed = True
+        timer = getattr(self, "_pump_after", None)
+        if timer is not None:
+            self.root.after_cancel(timer)
+            self._pump_after = None
         self.root.destroy()
 
     def show_config(self) -> None:
@@ -385,7 +395,10 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
                     self.disarm_btn.configure(state="disabled")
             self._render()
         finally:
-            self.root.after(10 if not self.messages.empty() else 50, self._pump)
+            if not getattr(self, "_ui_destroyed", False):
+                self._pump_after = self.root.after(
+                    10 if not self.messages.empty() else 50, self._pump
+                )
 
     def _update_alarms(self, rows: list[dict]) -> None:
         """검색 필터와 무관하게 날짜 범위 내 경고를 집계하고 알림을 반복한다."""
@@ -427,17 +440,30 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
             )
         )
         a, b = self._thresholds()
+        session_date = order_fields.desk_today()
         all_rows = self.book.full_view(a, b)
         rows = [
             row
             for row in all_rows
             if recent_order(
                 {"EMSX_DATE": row["trade_date"]},
+                today=session_date,
                 today_only=self.date_filter.get() == "오늘",
             )
         ]
         rows = sort_orders(
             rows,
+            basket_first=self.order_sort.get() == "Basket별 최신순",
+            oldest_first=self.order_sort.get() == "과거순",
+        )
+        calendar = getattr(self, "market_calendar", None)
+        self.dividend_target_date = (
+            calendar.next_business_date("US", session_date) if calendar else None
+        )
+        dividends = dividend_view(
+            rows,
+            session_date,
+            self.dividend_target_date,
             basket_first=self.order_sort.get() == "Basket별 최신순",
             oldest_first=self.order_sort.get() == "과거순",
         )
@@ -508,6 +534,8 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
                 [row for row in routes if basket in row["basket_name"].casefold()]
             ),
         }
+        if "배당 확인" in self.tabs:
+            items["배당 확인"] = dividends
         for name, data in items.items():
             tree = self.tabs[name]["tree"]
             cols = self.tabs[name]["columns"]
@@ -524,13 +552,19 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
                 ):
                     continue
                 if (
+                    name == "배당 확인"
+                    and self.only_alerts.get()
+                    and not x["dividend_risk"]
+                ):
+                    continue
+                if (
                     account
                     and account not in str(x.get("account", "")).upper()
                     and name != "Brokers"
                 ):
                     continue
                 broker_str = str(x.get("brokers", x.get("broker", ""))).upper()
-                if broker and broker not in broker_str:
+                if broker and name != "배당 확인" and broker not in broker_str:
                     continue
                 if q and q not in " ".join(str(x.get(k, "")) for k in cols).upper():
                     continue
@@ -541,6 +575,8 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
                 cells = [
                     format_adv(item.get(k))
                     if k == "adv_pct"
+                    else item.get(k) or "—"
+                    if k == "dividend_ex_date"
                     else f"{item.get(k, 0):,.1f}%"
                     if k == "fill_pct"
                     else f"{item[k]:,}"
@@ -552,13 +588,23 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
                 iid = (
                     f"{item['seq']}:{item['route_id']}"
                     if name == "Routes"
+                    else str(item["seq"])
+                    if name == "배당 확인"
                     else str(item["broker"])
                 )
-                tags = row_tags(
-                    idx,
-                    item.get("line_status", ""),
-                    bool(item.get("warning") or item.get("market_warning")),
-                    bool(item.get("adv_check")),
+                tags = (
+                    (
+                        ("dividend",)
+                        if item["dividend_risk"]
+                        else ("odd" if idx % 2 else "even",)
+                    )
+                    if name == "배당 확인"
+                    else row_tags(
+                        idx,
+                        item.get("line_status", ""),
+                        bool(item.get("warning") or item.get("market_warning")),
+                        bool(item.get("adv_check")),
+                    )
                 )
                 if iid in stale:
                     stale.remove(iid)
@@ -667,7 +713,7 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
         tab = self.nb.tab(self.nb.select(), "text")
         if tab not in self.tabs:
             messagebox.showinfo(
-                "CSV 저장", "Routes 또는 Brokers 탭을 선택하십시오."
+                "CSV 저장", "Routes, Brokers 또는 배당 확인 화면을 선택하십시오."
             )
             return
         if not messagebox.askokcancel(

@@ -351,6 +351,7 @@ def export_daily(request: ReportRequest, events: EventRows) -> dict[str, Any]:
         "create_time",
         "basket_name",
         "warning",
+        "dividend_ex_date",
     ]
     route_keys = [
         "seq",
@@ -431,6 +432,7 @@ def export_daily(request: ReportRequest, events: EventRows) -> dict[str, Any]:
                 "Create Time",
                 "Basket Name",
                 "Alerts",
+                "Dividend Ex Date",
             ],
             [[row.get(key, "") for key in order_keys] for row in request.orders],
         ),

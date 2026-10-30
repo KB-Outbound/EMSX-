@@ -4,6 +4,7 @@ from typing import Any
 import queue
 import threading
 from order_fields import desk_today
+from market_sessions import MarketCalendar
 
 SAMPLE = [
     (820001, "FUND_ALPHA", "7203 JP Equity", "BUY", 5000, "WORKING", "JEFF", 3500),
@@ -12,13 +13,19 @@ SAMPLE = [
     (820004, "FUND_DELTA", "BHP AU Equity", "BUY", 10000, "WORKING", "GS", 2500),
     (820005, "FUND_EPSILON", "9984 JP Equity", "SELL", 1200, "ORD-PEND", "", 0),
 ]
+DIVIDEND_SAMPLE = [
+    (820006, "FUND_US_ALPHA", "AAPL US Equity", "BUY", 1500, "NEW", "", 0),
+    (820007, "FUND_US_BETA", "MSFT US Equity", "SELL", 2000, "WORKING", "JEFF", 0),
+    (820008, "FUND_US_GAMMA", "NVDA US Equity", "BUY", 1000, "NEW", "", 0),
+]
 
 
 class DemoWorker(threading.Thread):
-    def __init__(self, output: queue.Queue) -> None:
+    def __init__(self, output: queue.Queue, include_dividends: bool = False) -> None:
         super().__init__(daemon=True)
         self.output = output
         self.stop_event = threading.Event()
+        self.include_dividends = include_dividends
 
     def emit(self, typ: str, **kwargs: Any) -> None:
         self.output.put({"type": typ, **kwargs})
@@ -27,20 +34,38 @@ class DemoWorker(threading.Thread):
         self.stop_event.set()
 
     def run(self) -> None:
+        today = desk_today()
+        target = later = None
+        if self.include_dividends:
+            try:
+                calendar = MarketCalendar.load()
+                target = calendar.next_business_date("US", today)
+                later = calendar.next_business_date("US", target) if target else None
+            except Exception as exc:
+                self.emit("warning", message=f"DEMO 배당 일정 확인 실패: {exc}")
         self.emit("connected", message="DEMO: synthetic data, no Bloomberg connection")
         for feed in ("O", "R"):
             self.emit("subscription", feed=feed, status="STARTED")
         n = 0
-        for seq, account, ticker, side, amount, status, broker, filled in SAMPLE:
+        samples = [*SAMPLE, *(DIVIDEND_SAMPLE if self.include_dividends else ())]
+        for seq, account, ticker, side, amount, status, broker, filled in samples:
             n += 1
+            dividend_date = (
+                target if seq == 820006 else later if seq == 820007 else None
+            )
             self.emit(
                 "reference",
                 security=ticker,
                 fields={
-                    "iso_country": ["JP", "HK", "TW", "AU", "JP"][n - 1],
+                    "iso_country": ["JP", "HK", "TW", "AU", "JP"][n - 1]
+                    if n <= len(SAMPLE)
+                    else "US",
                     "sec_type": "Common Stock",
                     "avg_volume_5d": 50000,
                     "avg_volume_20d": 100000 if n != 4 else 50000,
+                    "dividend_ex_date": dividend_date.isoformat()
+                    if dividend_date
+                    else None,
                 },
             )
             self.emit(
@@ -57,15 +82,21 @@ class DemoWorker(threading.Thread):
                     "EMSX_FILLED": filled,
                     "EMSX_STATUS": status,
                     "EMSX_TRADER": "DEMO",
-                    "EMSX_NOTES": "MOC" if n % 2 else "TWAP",
+                    "EMSX_NOTES": "T+2 / TWAP"
+                    if seq == 820006
+                    else "T+2 / MOC"
+                    if seq == 820007
+                    else "MOC"
+                    if n % 2
+                    else "TWAP",
                     "EMSX_BASKET_NAME": "DEMO_ALPHA" if n % 2 else "DEMO_BETA",
-                    "EMSX_DATE": int(desk_today().strftime("%Y%m%d")),
+                    "EMSX_DATE": int(today.strftime("%Y%m%d")),
                     "EMSX_TIME": 32400 + n,
                 },
             )
         self.emit("data", feed="O", status=11, fields={})
         i = 0
-        for seq, account, ticker, side, amount, status, broker, filled in SAMPLE:
+        for seq, account, ticker, side, amount, status, broker, filled in samples:
             if not broker:
                 continue
             i += 1

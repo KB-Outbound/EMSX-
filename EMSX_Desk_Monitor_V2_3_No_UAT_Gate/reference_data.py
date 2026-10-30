@@ -10,14 +10,17 @@ from typing import Any
 
 from diagnostics import LOGGER
 from feed_parsing import read_scalar, integer
+from dividend_rules import parse_ex_date
 
 FIELD_IDS = {
     "HS005": "avg_volume_5d",
     "HS007": "avg_volume_20d",
     "DS290": "iso_country",
     "DS213": "sec_type",
+    "DV018": "dividend_ex_date",
 }
 EXPECTED_VOLUMES = {"HS005": "VOLUME_AVG_5D", "HS007": "VOLUME_AVG_20D"}
+EXPECTED_DATES = {"DV018": "DVD_EX_DT"}
 SERVICES = {70001: "//blp/apiflds", 70002: "//blp/refdata"}
 FIELD_INFO_CID = 70003
 
@@ -171,7 +174,7 @@ class ReferenceDataFeed:
             if now - self.started_at >= 20:
                 self.warn(
                     "ref-service-timeout",
-                    "참조 서비스 미준비 · 국가·Sec Type·ADV는 확인 전까지 보류합니다",
+                    "참조 서비스 미준비 · 국가·Sec Type·ADV·배당락일 확인 보류",
                 )
             if now - self.started_at >= 30:
                 self._start()
@@ -282,7 +285,38 @@ class ReferenceDataFeed:
                     f"{field_id} 평균 거래량 필드 의미 확인 필요 · 해당 ADV 보류",
                 )
                 continue
+            if field_id in EXPECTED_DATES and mnemonic != EXPECTED_DATES[field_id]:
+                self.warn(
+                    "ref-date-" + field_id,
+                    f"{field_id} 배당락일 필드 의미 확인 필요 · 해당 판정 보류",
+                )
+                continue
             self.mnemonics[field_id] = mnemonic
+
+    def _date_value(self, fields: Any, mnemonic: str) -> str | None:
+        """배당락일 오류는 해당 값만 제외하고 다른 참조 필드 처리를 계속한다."""
+        try:
+            element = fields.getElement(mnemonic)
+            if element.isNull():
+                return None
+            try:
+                value = element.getValue()
+            except Exception:
+                value = scalar(fields, mnemonic)
+            parsed = parse_ex_date(value)
+            if parsed is not None:
+                return parsed.isoformat()
+            if value not in (None, ""):
+                self.warn(
+                    "ref-dividend-date",
+                    f"{mnemonic} 날짜 형식 확인 필요 · 배당 판정 보류",
+                )
+        except Exception:
+            LOGGER.warning(
+                "배당락일 추출 실패: 함수=_date_value 필드=%s", mnemonic, exc_info=True
+            )
+            self.warn("ref-dividend-date", f"{mnemonic} 추출 실패 · 배당 판정 보류")
+        return None
 
     def _data(self, msg: Any) -> None:
         if not msg.hasElement("securityData"):
@@ -319,8 +353,10 @@ class ReferenceDataFeed:
                 fields = entry.getElement("fieldData")
                 for field_id, mnemonic in self.mnemonics.items():
                     if fields.hasElement(mnemonic):
-                        output[FIELD_IDS[field_id]] = scalar(
-                            fields, mnemonic, field_id in EXPECTED_VOLUMES
+                        output[FIELD_IDS[field_id]] = (
+                            self._date_value(fields, mnemonic)
+                            if field_id in EXPECTED_DATES
+                            else scalar(fields, mnemonic, field_id in EXPECTED_VOLUMES)
                         )
             if entry.hasElement("fieldExceptions"):
                 for error in elements(entry.getElement("fieldExceptions")):
