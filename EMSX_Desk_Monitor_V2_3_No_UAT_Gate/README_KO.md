@@ -1,6 +1,6 @@
 # EMSX Desk Monitor V2 (HDGB TEAMVIEW + E2E Auto ACK)
 
-현재 버전은 **2.7.1**입니다. 시장 상태·휴장 안내·당일 Excel 보고서는
+현재 버전은 **2.7.2**입니다. 시장 상태·휴장 안내·당일 Excel 보고서는
 [운영 편의 기능 안내](OPERATIONS_KO.md)를 참조하십시오. 자동 Ack의 현재 실행 기준은
 [전체 대기 Order 단일 요청 전송](#266-전체-대기-order-단일-요청-전송)을 적용하십시오.
 시간 경고는 [지정 국가 검증과 MOC 예외](#268-지정-국가-검증과-moc-no-fill-예외)를 적용합니다.
@@ -604,3 +604,12 @@ MOC 수신 후 시각·음향 경고 해제와 부분 갱신 보존을 포함합
 - 주문별 안내의 판정 기준 접미사를 제거하고 GUI·Excel 열 이름을 휴장 확인으로 통일했습니다. 상태·문서에는 장 종료·휴장 용어를 사용합니다.
 - 기존 설정·DB·wheelhouse·런타임 의존성은 유지합니다. 전체 소스를 교체한 뒤 `python windows_build.py build`로 재빌드하십시오.
 - 총 219개 테스트를 통과했습니다. 정상 거래일의 장 종료·점심·미확인 일정, 실제 휴장일·주말, Cancel 변형, Order·Route 강조와 실제 체결 상태 전환을 검증했습니다. 실제 Windows UI·실행 파일·Bloomberg는 대상 PC 확인이 필요합니다.
+
+## 2.7.2 Routes 중심 화면과 Account·Ticker 고정
+
+- 상단 Orders 탭을 제거하고 Routes를 기본 화면으로 지정했습니다. 탭 순서는 Routes, Brokers, 자동 수신확인(Ack), Event Log입니다.
+- Routes와 자동 Ack 표의 Account·Ticker를 왼쪽에 고정했습니다. 글꼴 기준의 최소 너비와 현재 값의 글자 폭을 반영하며, 창 크기를 바꾸거나 상세 열을 가로 이동해도 식별 열은 유지됩니다.
+- 상세 열은 Broker·Side·수량·Line Status·Instruction·ADV 순으로 우선 배치했습니다. 가로 스크롤은 상세 영역에만 적용하고 모두 들어가면 숨깁니다. 매우 긴 Account·Ticker는 마우스를 올리면 원문을 확인할 수 있습니다.
+- Order 수신·자동 Ack·경고·감사·일일 보고서는 계속 동작합니다. Route의 Alerts 열에 상위 Order 경고를 표시하며 Alerts 필터는 Route 경고·휴장 안내·ADV 강조에 적용합니다. Route가 없는 주문은 상단 Unrouted·Alerts 집계와 당일 Order 보고서에서 확인합니다.
+- 기존 설정·DB·wheelhouse는 보존합니다. 새 `desk_tables.py`를 포함한 전체 소스를 교체한 뒤 `python windows_build.py build`로 재빌드하십시오.
+- 총 226개 테스트와 정적 검사를 통과했습니다. Linux 가상 화면의 실제 Tk 표에서 1,000·1,330·1,920픽셀 창 폭, 고정 열·가로/세로 이동·선택·행 갱신·CSV를 확인했습니다. 실제 Windows UI·실행 파일·Bloomberg는 대상 PC에서 확인해야 합니다.

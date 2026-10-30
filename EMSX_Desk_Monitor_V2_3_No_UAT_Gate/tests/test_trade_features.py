@@ -335,6 +335,7 @@ class TestDisplayIntegration(unittest.TestCase):
             (2, 20251231, "B"),
             (3, 20251230, "A"),
             (4, None, "A"),
+            (5, 20260101, "C"),
         ):
             app.book.ingest(
                 "O",
@@ -357,6 +358,16 @@ class TestDisplayIntegration(unittest.TestCase):
                 "EMSX_SEQUENCE": 1,
                 "EMSX_ROUTE_ID": 1,
                 "EMSX_AMOUNT": 1000,
+                "EMSX_STATUS": "WORKING",
+            },
+        )
+        app.book.ingest(
+            "R",
+            4,
+            {
+                "EMSX_SEQUENCE": 2,
+                "EMSX_ROUTE_ID": 1,
+                "EMSX_AMOUNT": 100,
                 "EMSX_STATUS": "WORKING",
             },
         )
@@ -399,7 +410,7 @@ class TestDisplayIntegration(unittest.TestCase):
                 "tree": Tree(),
                 "columns": ["create_time", "basket_name", "instruction"],
             }
-            for name in ("Orders", "Routes", "Brokers")
+            for name in ("Routes", "Brokers")
         }
         app.tabs["Routes"]["columns"] = ["create_time", "adv_pct", "adv_reason"]
         with (
@@ -407,20 +418,43 @@ class TestDisplayIntegration(unittest.TestCase):
             patch("emsx_desk_monitor.play_alarm") as sound,
         ):
             app._render()
-            self.assertEqual(set(app.tabs["Orders"]["tree"].rows), {"1", "2"})
-            self.assertEqual(app.tabs["Orders"]["tree"].rows["1"]["values"][-1], "MOC")
+            self.assertNotIn("Orders", app.tabs)
+            self.assertEqual(app.eligible_ids, {1, 2, 5})
+            self.assertEqual(set(app.tabs["Routes"]["tree"].rows), {"1:1", "2:1"})
             sound.assert_called_once()
             self.assertEqual(app.tabs["Routes"]["tree"].rows["1:1"]["values"][1], "10%")
             self.assertEqual(app.tabs["Routes"]["tree"].rows["1:1"]["tags"], ("adv",))
+            app.only_alerts.set(True)
+            app._render()
+            self.assertEqual(set(app.tabs["Routes"]["tree"].rows), {"1:1"})
+            app.only_alerts.set(False)
             app.basket_filter.set("a")
             app._render()
-            self.assertEqual(set(app.tabs["Orders"]["tree"].rows), {"1"})
+            self.assertEqual(set(app.tabs["Routes"]["tree"].rows), {"1:1"})
             app.date_filter.set("오늘")
             app.basket_filter.set("")
             app._render()
-            self.assertEqual(set(app.tabs["Orders"]["tree"].rows), {"1"})
+            self.assertEqual(set(app.tabs["Routes"]["tree"].rows), {"1:1"})
             self.assertIn("Date Missing 1", app.counts.get())
             self.assertNotIn("정동화", app.environment_header.get())
+            app.book.now = lambda: 2000.0
+            app.book.ingest(
+                "O",
+                7,
+                {"EMSX_SEQUENCE": 1, "EMSX_NOTES": "TWAP", "EMSX_FILLED": 0},
+            )
+            app.book.ingest(
+                "R",
+                7,
+                {"EMSX_SEQUENCE": 1, "EMSX_ROUTE_ID": 1, "EMSX_FILLED": 0},
+            )
+            sound.reset_mock()
+            app.alert_tracker.last_sound = None
+            app.only_alerts.set(True)
+            app._render()
+            self.assertIn("No-Fill Alert", app._visible["Routes"][0]["warning"])
+            self.assertEqual(app.tabs["Routes"]["tree"].rows["1:1"]["tags"], ("alert",))
+            sound.assert_called_once()
             app.monitoring = False
             app.alert_tracker.last_sound = None
             app._render()

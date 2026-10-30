@@ -308,7 +308,7 @@ class OperationsMixin:
     def add_trader_note(self) -> None:
         selected = None
         tab = self.nb.tab(self.nb.select(), "text")
-        if tab in self.tabs:
+        if tab == "Routes":
             choice = self.tabs[tab]["tree"].selection()
             if choice:
                 try:

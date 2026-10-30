@@ -23,6 +23,7 @@ from order_fields import (
     DESK_TIMEZONE,
 )
 from desk_utilities import OperationsMixin
+from desk_tables import PinnedTreeview, ROUTE_COLUMNS
 from alerting import AlertTracker, play_alarm
 from risk_rules import format_adv
 from resource_paths import asset_path
@@ -38,7 +39,7 @@ from kb_theme import (
     row_tags,
 )
 
-VERSION = "2.7.1"
+VERSION = "2.7.2"
 APP_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "EMSX_Desk_Monitor_HDGB"
 ADMIN_CONFIG = APP_DIR / "admin_config.json"
 LEDGER_PATH = APP_DIR / "ack_journal.sqlite3"
@@ -165,7 +166,7 @@ class MonitorApp(OperationsMixin):
             side="left", padx=5
         )
         ttk.Checkbutton(
-            filt, text="Alerts만 표시 (Order)", variable=self.only_alerts
+            filt, text="Alerts만 표시 (Route)", variable=self.only_alerts
         ).pack(side="left", padx=12)
         scope = ttk.Frame(box)
         scope.pack(fill="x", pady=(0, 8))
@@ -230,48 +231,7 @@ class MonitorApp(OperationsMixin):
         nb = ttk.Notebook(box)
         nb.pack(fill="both", expand=True)
         spec = {
-            "Orders": [
-                ("create_time", "Create Time", 165),
-                ("basket_name", "Basket Name", 140),
-                ("account", "Account", 148),
-                ("ticker", "Ticker", 152),
-                ("side", "Side", 60),
-                ("qty", "Shares", 95),
-                ("filled", "Fill", 95),
-                ("remain", "Remain", 95),
-                ("fill_pct", "Fill %", 70),
-                ("line_status", "Line Status", 110),
-                ("instruction", "Instruction", 150),
-                ("market_code", "Market", 70),
-                ("market_status", "장 상태", 100),
-                ("market_warning", "휴장 확인", 300),
-                ("brokers", "Brokers", 105),
-                ("routes", "Routes", 55),
-                ("warning", "Alerts", 240),
-            ],
-            "Routes": [
-                ("route_id", "Route#", 66),
-                ("create_time", "Create Time", 165),
-                ("basket_name", "Basket Name", 140),
-                ("account", "Account", 145),
-                ("ticker", "Ticker", 135),
-                ("broker", "Broker", 80),
-                ("side", "Side", 62),
-                ("qty", "Route Qty", 90),
-                ("filled", "Fill", 90),
-                ("remain", "Remain", 90),
-                ("line_status", "Line Status", 110),
-                ("instruction", "Instruction", 150),
-                ("iso_country", "ISO Country", 90),
-                ("market_code", "Market", 70),
-                ("market_status", "장 상태", 100),
-                ("market_warning", "휴장 확인", 300),
-                ("sec_type", "Sec Type", 120),
-                ("adv_pct", "ADV (20D)", 100),
-                ("adv_reason", "ADV Check", 190),
-                ("avg_price", "Avg Price", 90),
-                ("parent_visible", "상위 Order 확인", 98),
-            ],
+            "Routes": ROUTE_COLUMNS,
             "Brokers": [
                 ("broker", "Broker", 150),
                 ("routes", "Routes", 100),
@@ -284,6 +244,13 @@ class MonitorApp(OperationsMixin):
         for label, columns in spec.items():
             frame = ttk.Frame(nb, padding=3)
             nb.add(frame, text=label)
+            frame.rowconfigure(0, weight=1)
+            frame.columnconfigure(0, weight=1)
+            if label == "Routes":
+                tree = PinnedTreeview(frame, columns)
+                tree.grid(row=0, column=0, sticky="nsew")
+                self.tabs[label] = {"columns": [c[0] for c in columns], "tree": tree}
+                continue
             tree = ttk.Treeview(
                 frame,
                 columns=[col[0] for col in columns],
@@ -295,6 +262,7 @@ class MonitorApp(OperationsMixin):
                 tree.column(
                     key,
                     width=width,
+                    minwidth=min(width, 80),
                     anchor="e"
                     if key
                     in (
@@ -310,14 +278,12 @@ class MonitorApp(OperationsMixin):
                         "avg_price",
                     )
                     else "w",
-                    stretch=key in ("account", "ticker", "warning"),
+                    stretch=True,
                 )
             configure_rows(tree)
             sb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
             horizontal = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
             tree.configure(yscrollcommand=sb.set, xscrollcommand=horizontal.set)
-            frame.rowconfigure(0, weight=1)
-            frame.columnconfigure(0, weight=1)
             tree.grid(row=0, column=0, sticky="nsew")
             sb.grid(row=0, column=1, sticky="ns")
             horizontal.grid(row=1, column=0, sticky="ew")
@@ -376,30 +342,8 @@ class MonitorApp(OperationsMixin):
         ack_table.pack(fill="both", expand=True)
         ack_table.rowconfigure(0, weight=1)
         ack_table.columnconfigure(0, weight=1)
-        self.ack_tree = ttk.Treeview(
-            ack_table, columns=[c[0] for c in acols], show="headings"
-        )
-        configure_rows(self.ack_tree)
-        for col, label, width in acols:
-            self.ack_tree.heading(col, text=label)
-            self.ack_tree.column(
-                col,
-                width=width,
-                anchor="e" if col == "qty" else "w",
-                stretch=col in ("account", "ticker", "ack_detail"),
-            )
-        ack_scroll = ttk.Scrollbar(
-            ack_table, orient="vertical", command=self.ack_tree.yview
-        )
-        ack_horizontal = ttk.Scrollbar(
-            ack_table, orient="horizontal", command=self.ack_tree.xview
-        )
-        self.ack_tree.configure(
-            yscrollcommand=ack_scroll.set, xscrollcommand=ack_horizontal.set
-        )
+        self.ack_tree = PinnedTreeview(ack_table, acols)
         self.ack_tree.grid(row=0, column=0, sticky="nsew")
-        ack_scroll.grid(row=0, column=1, sticky="ns")
-        ack_horizontal.grid(row=1, column=0, sticky="ew")
         activity = ttk.Frame(nb, padding=3)
         nb.add(activity, text="Event Log")
         log = tk.Text(
@@ -786,6 +730,10 @@ class MonitorApp(OperationsMixin):
         )
         if self.order_sort.get() == "Basket별 최신순":
             routes.sort(key=lambda row: row["basket_name"].casefold())
+        parents = {row["seq"]: row for row in rows}
+        for route in routes:
+            parent = parents[route["seq"]]
+            route.update(warning=parent["warning"], alert_types=parent["alert_types"])
         stats = self.book.counters(rows, len(routes))
         self._annotate_market_rows(rows, routes)
         self._track_operational_events(rows)
@@ -829,7 +777,6 @@ class MonitorApp(OperationsMixin):
         broker = self.broker_filter.get().strip().upper()
         basket = self.basket_filter.get().strip().casefold()
         items = {
-            "Orders": rows,
             "Routes": routes,
             "Brokers": self.book.broker_summary(
                 [row for row in routes if basket in row["basket_name"].casefold()]
@@ -843,10 +790,11 @@ class MonitorApp(OperationsMixin):
                 if name != "Brokers" and basket not in x["basket_name"].casefold():
                     continue
                 if (
-                    name == "Orders"
+                    name == "Routes"
                     and self.only_alerts.get()
                     and not x["alert_types"]
                     and not x.get("market_warning")
+                    and not x.get("adv_check")
                 ):
                     continue
                 if (
@@ -876,9 +824,7 @@ class MonitorApp(OperationsMixin):
                     for k in cols
                 ]
                 iid = (
-                    str(item["seq"])
-                    if name == "Orders"
-                    else f"{item['seq']}:{item['route_id']}"
+                    f"{item['seq']}:{item['route_id']}"
                     if name == "Routes"
                     else str(item["broker"])
                 )
@@ -901,6 +847,8 @@ class MonitorApp(OperationsMixin):
                     tree.insert("", "end", iid=iid, values=cells, tags=tags)
             for iid in stale:
                 tree.delete(iid)
+            if isinstance(tree, PinnedTreeview):
+                tree.refresh_identity_widths()
         self._visible = items
         healthy = (
             stats["stream_ok"]
@@ -985,12 +933,14 @@ class MonitorApp(OperationsMixin):
                 )
         for obsolete in previous:
             self.ack_tree.delete(obsolete)
+        if isinstance(self.ack_tree, PinnedTreeview):
+            self.ack_tree.refresh_identity_widths()
 
     def export(self) -> None:
         tab = self.nb.tab(self.nb.select(), "text")
         if tab not in self.tabs:
             messagebox.showinfo(
-                "CSV 저장", "Order, Route 또는 Broker 탭을 선택하십시오."
+                "CSV 저장", "Routes 또는 Brokers 탭을 선택하십시오."
             )
             return
         if not messagebox.askokcancel(
