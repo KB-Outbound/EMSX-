@@ -9,15 +9,17 @@ from order_fields import sort_orders
 from risk_rules import country_code
 
 DIVIDEND_ALERT = "Dividend Ex-Date Alert"
+SPLIT_ALERT = "Stock Split Alert"
 DIVIDEND_COLUMNS: tuple[tuple[str, str, int], ...] = (
-    ("create_time", "Create Time", 138),
-    ("account", "Account", 140),
-    ("ticker", "Ticker", 170),
-    ("qty", "Qty", 78),
-    ("iso_country", "ISO", 42),
-    ("instruction", "Instruction", 116),
-    ("basket_name", "Basket Name", 135),
+    ("create_time", "Create Time", 126),
+    ("account", "Account", 120),
+    ("ticker", "Ticker", 145),
+    ("qty", "Qty", 66),
+    ("iso_country", "ISO", 36),
+    ("instruction", "Instruction", 96),
+    ("basket_name", "Basket Name", 108),
     ("dividend_ex_date", "Dividend Ex Date", 125),
+    ("split_date", "Split Date", 100),
 )
 
 
@@ -60,6 +62,13 @@ def dividend_risk(row: dict[str, Any], target_date: date | None) -> bool:
     return ex_date is not None and ex_date == target_date
 
 
+def split_risk(row: dict[str, Any], target_date: date | None) -> bool:
+    """배당 확인과 같은 미국 T+2 범위에서 익영업일 Split Date를 확인한다."""
+    if target_date is None or not dividend_candidate(row):
+        return False
+    return parse_ex_date(row.get("split_date")) == target_date
+
+
 def dividend_view(
     rows: list[dict[str, Any]],
     session_date: date,
@@ -73,10 +82,12 @@ def dividend_view(
     candidates = []
     for row in rows:
         row["dividend_risk"] = dividend_risk(row, target_date)
+        row["split_risk"] = split_risk(row, target_date)
+        row["corporate_action_risk"] = row["dividend_risk"] or row["split_risk"]
         row["dividend_session_date"] = session_date.isoformat()
         row["dividend_target_date"] = target_date.isoformat() if target_date else ""
         if dividend_candidate(row):
             candidates.append(row)
     ordered = sort_orders(candidates, basket_first, oldest_first)
-    ordered.sort(key=lambda row: not row["dividend_risk"])
+    ordered.sort(key=lambda row: not row["corporate_action_risk"])
     return ordered

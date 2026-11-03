@@ -14,6 +14,7 @@ from dividend_rules import (
     parse_ex_date,
     dividend_candidate,
     dividend_risk,
+    split_risk,
     dividend_view,
 )
 from market_sessions import MarketCalendar
@@ -146,6 +147,25 @@ class TestDividendRules(unittest.TestCase):
             self.assertTrue(all(not row["dividend_risk"] for row in ordered[2:]))
             self.assertTrue(all(row["alert_types"] == () for row in rows))
             self.assertTrue(all(row["status"] == "WORKING" for row in rows))
+
+    def test_split_only_and_combined_risks_share_business_day_priority(self) -> None:
+        rows = self.rows()
+        rows[1]["split_date"] = "2026-11-02"
+        rows[2]["split_date"] = "20261102"
+        rows[3]["split_date"] = "2026-11-02"
+        rows[4]["split_date"] = "2026-11-02"
+        for basket, oldest in product((False, True), repeat=2):
+            ordered = dividend_view(
+                rows, date(2026, 10, 30), date(2026, 11, 2), basket, oldest
+            )
+            self.assertEqual({row["seq"] for row in ordered[:3]}, {1, 2, 3})
+            self.assertFalse(rows[1]["dividend_risk"])
+            self.assertTrue(rows[1]["split_risk"])
+            self.assertFalse(split_risk(rows[3], date(2026, 11, 2)))
+            self.assertFalse(split_risk(rows[4], date(2026, 11, 2)))
+        cleared = dividend_view(rows, date(2026, 11, 2), date(2026, 11, 3))
+        self.assertFalse(any(row["split_risk"] for row in cleared))
+        self.assertFalse(split_risk(rows[1], None))
 
     def test_session_rollover_uses_the_session_day_and_preserves_candidates(
         self,

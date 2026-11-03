@@ -360,7 +360,7 @@ class TestSessionIntegration(unittest.TestCase):
                 self.assertNotIn("AttributeError", "\n".join(logs.output))
                 self.assertTrue(worker.feed_error)
                 self.assertFalse(worker.engine.armed)
-                self.assertEqual(len(subscriptions), 5)
+                self.assertEqual(len(subscriptions), 9)
                 book = DeskBook()
                 while not output.empty():
                     item = output.get_nowait()

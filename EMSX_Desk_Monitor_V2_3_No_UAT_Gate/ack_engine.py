@@ -1,7 +1,7 @@
 """E2E Ack 판정과 영속 예약 및 감사 기록을 관리한다.
 
 TEAMVIEW 조회 권한은 전송 권한을 증명하지 않는다. 승인된 단일 전송자만 사용한다.
-초기 스냅샷은 자동 승인하지 않으며 운영 전송의 기본값은 비활성이다."""
+초기 스냅샷은 자동 승인하지 않으며 실제 전송에는 관리자 전송 허용이 필요하다."""
 
 from __future__ import annotations
 from typing import Any, Callable, Sequence
@@ -343,7 +343,8 @@ class AckEngine:
             self.disarm("피드 준비 상태가 해제됨")
 
     @synchronized
-    def set_arm(self, arm: bool) -> None:
+    def set_arm(self, arm: bool, source: str = "OPERATOR_ARM") -> None:
+        """권한·수신 상태 확인 후 전환하며 중복 ON 요청은 대기 배치를 보존한다."""
         if self.closed:
             return
         if not arm:
@@ -352,6 +353,8 @@ class AckEngine:
             self.new_while_armed.clear()
             self.queued.clear()
             self.notify("ack_armed", armed=False, reason="Operator disarmed")
+            return
+        if self.armed:
             return
         permitted, reason = write_authorized(self.env, self.team, self.config)
         if not permitted or not self.stream_ready or self.error:
@@ -365,7 +368,7 @@ class AckEngine:
             )
             return
         self.armed = True
-        self.audit("OPERATOR_ARM")
+        self.audit(source)
         self.new_while_armed.clear()
         self.queued.clear()
         self.notify(

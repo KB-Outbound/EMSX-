@@ -18,9 +18,13 @@ FIELD_IDS = {
     "DS290": "iso_country",
     "DS213": "sec_type",
     "DV018": "dividend_ex_date",
+    "DV_017": "split_date",
 }
 EXPECTED_VOLUMES = {"HS005": "VOLUME_AVG_5D", "HS007": "VOLUME_AVG_20D"}
-EXPECTED_DATES = {"DV018": "DVD_EX_DT"}
+EXPECTED_DATES = {"DV018": "DVD_EX_DT", "DV_017": "EQY_SPLIT_DT"}
+# Split 필드는 mnemonic으로 조회하여 공급자의 ID 밑줄 표기 차이를 흡수한다.
+FIELD_LOOKUPS = {"DV_017": "EQY_SPLIT_DT"}
+FIELD_ALIASES = {"DV017": "DV_017", "EQY_SPLIT_DT": "DV_017"}
 SERVICES = {70001: "//blp/apiflds", 70002: "//blp/refdata"}
 FIELD_INFO_CID = 70003
 
@@ -187,7 +191,9 @@ class ReferenceDataFeed:
                     "FieldInfoRequest"
                 )
                 for field in FIELD_IDS:
-                    request.getElement("id").appendValue(field)
+                    request.getElement("id").appendValue(
+                        FIELD_LOOKUPS.get(field, field)
+                    )
                 self.session.sendRequest(
                     request, correlationId=self.api.CorrelationId(self.info_cid)
                 )
@@ -258,6 +264,7 @@ class ReferenceDataFeed:
             return
         for entry in elements(msg.getElement("fieldData")):
             field_id = scalar(entry, "id")
+            field_id = FIELD_ALIASES.get(field_id, field_id)
             if field_id not in FIELD_IDS:
                 continue
             if entry.hasElement("fieldError") or not entry.hasElement("fieldInfo"):
@@ -288,13 +295,13 @@ class ReferenceDataFeed:
             if field_id in EXPECTED_DATES and mnemonic != EXPECTED_DATES[field_id]:
                 self.warn(
                     "ref-date-" + field_id,
-                    f"{field_id} 배당락일 필드 의미 확인 필요 · 해당 판정 보류",
+                    f"{field_id} 날짜 필드 의미 확인 필요 · 해당 판정 보류",
                 )
                 continue
             self.mnemonics[field_id] = mnemonic
 
     def _date_value(self, fields: Any, mnemonic: str) -> str | None:
-        """배당락일 오류는 해당 값만 제외하고 다른 참조 필드 처리를 계속한다."""
+        """선택 날짜 오류는 해당 값만 제외하고 다른 참조 필드 처리를 계속한다."""
         try:
             element = fields.getElement(mnemonic)
             if element.isNull():
@@ -308,14 +315,14 @@ class ReferenceDataFeed:
                 return parsed.isoformat()
             if value not in (None, ""):
                 self.warn(
-                    "ref-dividend-date",
-                    f"{mnemonic} 날짜 형식 확인 필요 · 배당 판정 보류",
+                    "ref-date-" + mnemonic,
+                    f"{mnemonic} 날짜 형식 확인 필요 · 해당 판정 보류",
                 )
         except Exception:
             LOGGER.warning(
-                "배당락일 추출 실패: 함수=_date_value 필드=%s", mnemonic, exc_info=True
+                "참조 날짜 추출 실패: 함수=_date_value 필드=%s", mnemonic, exc_info=True
             )
-            self.warn("ref-dividend-date", f"{mnemonic} 추출 실패 · 배당 판정 보류")
+            self.warn("ref-date-" + mnemonic, f"{mnemonic} 추출 실패 · 해당 판정 보류")
         return None
 
     def _data(self, msg: Any) -> None:
@@ -361,6 +368,7 @@ class ReferenceDataFeed:
             if entry.hasElement("fieldExceptions"):
                 for error in elements(entry.getElement("fieldExceptions")):
                     mnemonic = scalar(error, "fieldId")
+                    mnemonic = FIELD_ALIASES.get(mnemonic, mnemonic)
                     for field_id, resolved in self.mnemonics.items():
                         if mnemonic in (field_id, resolved):
                             output[FIELD_IDS[field_id]] = None

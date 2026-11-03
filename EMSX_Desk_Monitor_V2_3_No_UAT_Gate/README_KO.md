@@ -1,6 +1,7 @@
 # EMSX Desk Monitor V2 (HDGB TEAMVIEW + E2E Auto ACK)
 
-현재 버전은 **2.9.0**입니다. 신규 [미국 T+2 배당 확인](DIVIDEND_KO.md)은 KST 날짜와 다음 NYSE 영업일을 기준으로 합니다.
+현재 버전은 **2.10.0**입니다. [최신 개선 안내](DESK_ENHANCEMENTS_KO.md): 미라우팅 Order 표시, 익영업일 Split Date 확인, Broker·Currency별 Notional Value, 기본 ON 자동 Ack 토글을 제공합니다.
+자동 Ack는 초기 수신과 기존 관리자 전송 허용 검사를 통과한 뒤 신규 적격 Order에만 적용합니다.
 화면 구성은 [거래 표 중심 화면](#280-거래-표-중심-화면)을 참조하십시오.
 시장 상태·휴장 안내·당일 Excel 보고서는
 [운영 편의 기능 안내](OPERATIONS_KO.md)를 참조하십시오. 자동 Ack의 현재 실행 기준은
@@ -184,7 +185,7 @@ Windows 빌드 콘솔은 UTF-8을 사용합니다.
 ### 거래일과 생성 시각
 
 일반 실행의 기본 환경은 PROD입니다. 시작 버튼을 누르기 전에는 연결하지 않으며,
-PROD 연결 확인창과 기본 전송 차단·수동 자동 Ack 활성화 절차는 유지합니다.
+PROD 연결 확인창과 관리자 전송 허용 검사는 유지합니다. 2.10.0의 자동 Ack는 기본 ON 토글로 제어합니다.
 `run_demo.bat` 또는 `python emsx_desk_monitor.py --demo`로 실행하면 DEMO를 선택합니다.
 
 Create Time은 원본 `EMSX_DATE`와 `EMSX_TIME`을 사용합니다. `EMSX_TIME` 숫자는
@@ -292,7 +293,7 @@ Instruction(`EMSX_NOTES`), Basket(`EMSX_BASKET_NAME`), 시각(`EMSX_TIME`)을 �
 - Ack 응답 형식을 확인할 수 없으면 성공·실패로 단정하지 않고 정상 응답 또는 기존 타임아웃까지
   기다립니다. 결과가 불확실해진 요청은 자동 재전송하지 않습니다.
 
-시작 시 자동 Ack 해제는 정상적인 기본 안전 설정입니다. 이번 수정은 이를 자동으로 활성화하지 않습니다.
+2.10.0부터 자동 Ack 토글은 기본 ON입니다. 초기 수신 후 기존 관리자 전송 허용 조건을 통과해야 실제 활성화합니다.
 
 ### 진단 로그 확인과 배포
 
@@ -473,8 +474,8 @@ Event Log에는 배치 ID 앞 12자리·건수·상태를 요약합니다.
 `UNKNOWN`으로 보존하고 자동 Ack를 해제하며 자동 재전송하지 않습니다.
 배치 내 일부 Order가 실제로 처리되었을 수 있으므로 EMSX에서 개별 결과를 대조하십시오.
 
-기존 설정 키·기본 비활성 상태·DB 스키마와 단건 `send_func(sequence, cid)` 계약을 유지합니다.
-배치 전송 콜백을 지정하지 않는 기존 엔진 사용자는 기존 단건 동작을 유지합니다.
+기존 설정 키·관리자 전송 허용·DB 스키마를 유지합니다.
+현재 자동 Ack는 배치 콜백이 필수이며 단건 대체 전송을 사용하지 않습니다.
 추가 의존성이나 DB 초기화는 필요하지 않습니다. 전체 소스를 교체하고,
 기존 빌드 환경에서 `python windows_build.py build`로 새 실행 파일을 만드십시오.
 
@@ -639,3 +640,13 @@ DEMO 테스트 데이터로 실행한 화면입니다.
 - 총 255개 테스트와 실제 Linux Tk DEMO 수신·표시·종료를 검증했습니다. 실제 Windows 실행 파일·Bloomberg 필드 응답은 대상 PC 확인이 필요합니다. 기존 설정·DB·wheelhouse와 런타임 의존성은 유지합니다.
 
 기준 날짜·휴장·누락 처리와 운영 방법은 [배당 확인 안내](DIVIDEND_KO.md)를 참조하십시오.
+
+
+## 2.10.0 데스크 모니터 개선
+
+- Routes에서 New·Pending·Ord-pend 등 미라우팅 Order도 확인합니다. 실제 Route 생성 시 중복 없이 전환합니다.
+- 배당 확인의 Split Date와 Dividend Ex Date 중 하나라도 KST 기준 다음 NYSE 영업일이면 강조합니다. 미국 T+2 범위와 기존 검색·Alerts 조건을 유지합니다.
+- 보기 → Brokers는 Broker·Currency별 Notional Value와 미확인 Route 수를 표시합니다. 통화를 섞거나 미확인 금액을 0으로 표시하지 않습니다.
+- 자동 Ack는 기본 ON 단일 토글입니다. 초기 수신·기존 전송 허용 검사를 통과한 뒤 신규 적격 Order를 단일 배치로 전송합니다. 별도 활성화 확인창과 중복 해제·조건 버튼을 제거했습니다.
+
+계산식·필드·오류 격리·배포·화면 예시는 [2.10.0 개선 안내](DESK_ENHANCEMENTS_KO.md)에 있습니다.

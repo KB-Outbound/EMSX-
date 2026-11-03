@@ -1,8 +1,8 @@
-# 미국 T+2 배당 확인
+# 미국 T+2 배당·Split 확인
 
 2.9.0부터 자동 Ack 오른쪽의 **배당 확인** 탭을 제공합니다.
 표에는 Create Time, Account, Ticker, Qty, ISO, Instruction, Basket Name,
-Dividend Ex Date의 8개 열만 표시합니다. Qty는 Route 수량이 아닌 원래 Order 수량입니다.
+Dividend Ex Date, Split Date의 9개 열을 표시합니다. Qty는 Route 수량이 아닌 원래 Order 수량입니다.
 
 ## 대상과 우선 표시
 
@@ -10,10 +10,12 @@ Dividend Ex Date의 8개 열만 표시합니다. Qty는 Route 수량이 아닌 �
 ISO는 기존 DS290 발행국 코드가 `US`인 경우이며 Ticker 문자열로 국가를 추정하지 않습니다.
 Instruction은 EMSX 고객 비고 `EMSX_NOTES`를 사용하며 대소문자와 관계없이 `T+2` 문자열이 포함되어야 합니다.
 
-이 후보 중 `DVD_EX_DT`가 **KST 기준 다음 NYSE 영업일**과 정확히 같은 행을
+2.10.0부터 Split Date도 함께 확인합니다. [전체 개선 안내](DESK_ENHANCEMENTS_KO.md)를 참조하십시오.
+
+이 후보 중 `DVD_EX_DT` 또는 `EQY_SPLIT_DT`가 **KST 기준 다음 NYSE 영업일**과 정확히 같은 행을
 갈색·금색 배경으로 강조하고 맨 위에 고정합니다.
 최신순·과거순·Basket별 정렬을 바꾸어도 위험 행은 항상 먼저 표시합니다.
-**Alerts**를 켜면 이 세 조건을 모두 만족한 행만 표시합니다.
+**Alerts**를 켜면 배당락일 또는 Split Date가 익영업일인 위험 행만 표시합니다.
 Account·Ticker·Basket 검색과 오늘·전일 생성일 범위는 유지합니다.
 이 화면에는 Broker 검색을 적용하지 않아 Route가 없는 Order도 확인할 수 있습니다.
 
@@ -40,6 +42,7 @@ KST 날짜가 바뀌거나 참조값이 갱신되면 대상 영업일·강조·�
 
 ## Bloomberg 배당락일
 
+Split 필드는 `EQY_SPLIT_DT`로 검증하며 ID `DV_017`·`DV017` 표기를 지원합니다.
 필드 ID `DV018`을 `//blp/apiflds`에서 확인하고 mnemonic `DVD_EX_DT`를
 기존 `//blp/refdata` 요청에 포함합니다. EMSX Order·Route 구독 필드에는 추가하지 않습니다.
 참조 요청은 기존 작업자에서 종목별 중복 제거·묶음 요청·5분 캐시 정책을 사용합니다.
@@ -51,13 +54,13 @@ None·권한 오류·잘못된 형식은 `—`로 표시하며 과거 값으로 
 
 ## 기록과 내보내기
 
-강조 시작·해제는 기존 데스크 일지에 기록합니다. 시작 기록에는 Order·Qty·Ticker·Instruction·ISO,
+강조 시작·해제는 기존 데스크 일지에 기록합니다. 배당·Split은 별도 유형입니다. 시작 기록에는 Order·Qty·Ticker·Instruction·ISO,
 KST 기준일·대상 NYSE 영업일·수신 배당락일을 포함하며 같은 상태를 반복 기록하지 않습니다.
 하단 배당 건수와 시각 강조로 확인하며 기존 Route 지연·No-Fill 음향 규칙은 유지합니다.
 고객 안내를 위한 확인 화면이며 주문·결제일을 자동 변경하지 않습니다.
 
-**보기 → 현재 화면 CSV 저장**은 현재 배당 화면의 필터·정렬과 8개 열을 저장합니다.
-**일지 내보내기**는 기존 7개 Excel 시트를 유지하며 Order 현황에 Dividend Ex Date를 추가합니다.
+**보기 → 현재 화면 CSV 저장**은 현재 배당 화면의 필터·정렬과 9개 열을 저장합니다.
+**일지 내보내기**는 기존 7개 Excel 시트를 유지하며 Order 현황에 Dividend Ex Date·Split Date를 포함합니다.
 배당 확인 화면에서 선택한 Order에 트레이더 메모를 연결할 수 있습니다.
 
 ## DEMO와 배포
@@ -73,7 +76,7 @@ T+2 지시가 없는 미국 Order를 추가해 강조·정렬·제외 조건을 
 python windows_build.py build
 ```
 
-총 255개 테스트와 Linux의 한국어 Tk 화면에서 날짜·휴장·정렬·필드 오류·CSV·실제 DEMO 종료를 검증했습니다.
+날짜·휴장·정렬·필드 오류·CSV·실제 DEMO 종료를 자동 검사와 Linux의 한국어 Tk 화면에서 검증합니다.
 실제 Bloomberg 필드 권한·응답과 Windows 실행 파일은 대상 PC에서 확인해야 합니다.
 
 ![배당 확인 DEMO 화면](docs/EMSX_DIVIDEND_V2_9_DEMO.png)

@@ -11,6 +11,7 @@ import queue
 import time
 import tkinter as tk
 from tkinter import filedialog, messagebox
+from typing import Any
 import order_fields
 
 from bloomberg_feed import BloombergWorker
@@ -35,10 +36,30 @@ from ack_engine import load_config, eligibility, write_authorized
 from ui_text import APP_TITLE, DESK_TITLE, localize
 from kb_theme import row_tags
 
-VERSION = "2.9.0"
+VERSION = "2.10.0"
 APP_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "EMSX_Desk_Monitor_HDGB"
 ADMIN_CONFIG = APP_DIR / "admin_config.json"
 LEDGER_PATH = APP_DIR / "ack_journal.sqlite3"
+
+
+def display_cell(key: str, row: dict[str, Any]) -> Any:
+    """표시 형식만 바꾸며 금액·날짜의 미확인을 0으로 대체하지 않는다."""
+    value = row.get(key)
+    if key == "adv_pct":
+        return format_adv(value)
+    if key in {"dividend_ex_date", "split_date", "currency"}:
+        return value or "—"
+    if key == "route_id" and row.get("is_unrouted"):
+        return "—"
+    if key == "notional_value":
+        return f"{value:,.2f}" if value is not None else "—"
+    if key == "fill_pct":
+        return f"{value or 0:,.1f}%"
+    if key in {"qty", "filled", "remain", "routed", "remaining"} and isinstance(
+        value, int
+    ):
+        return f"{value:,}"
+    return value if value is not None else ""
 
 
 class MonitorApp(DeskLayoutMixin, OperationsMixin):
@@ -60,7 +81,8 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
         self.admin_config = load_config(ADMIN_CONFIG)
         self.ack_states = {}
         self.armed = False
-        self.arm_state = tk.StringVar(value="자동 수신확인 해제 · 전송 없음")
+        self.auto_ack_enabled = tk.BooleanVar(value=environment != "DEMO")
+        self.arm_state = tk.StringVar(value="자동 Ack 대기 · 연결 후 조건 확인")
         self.arm_blocker = tk.StringVar(value="활성화 불가: 모니터링을 시작하십시오")
         self.worker = None
         self.monitoring = False
@@ -126,7 +148,7 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
         team = self.team.get().strip()
         if env == "PROD" and not messagebox.askokcancel(
             "운영 환경 모니터링",
-            "PROD는 실제 EMSX 데이터에 연결합니다.\n자동 수신확인은 해제 상태로 시작하며 운영 전송은 기본적으로 차단됩니다.\n모니터링을 시작하시겠습니까?",
+            "PROD는 실제 EMSX 데이터에 연결합니다.\n자동 Ack가 ON이면 초기 수신 완료 후 승인된 전송 조건을 검사합니다.\n모니터링을 시작하시겠습니까?",
         ):
             return
         self.book = DeskBook()
@@ -136,7 +158,10 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
         self.ack_states = {}
         self.alert_tracker = AlertTracker()
         self.armed = False
-        self.arm_state.set("자동 수신확인 해제 · 전송 없음")
+        self.arm_state.set(
+            "자동 Ack 대기 · 초기 수신 후 조건 확인"
+            if self.auto_ack_enabled.get() else "자동 Ack OFF"
+        )
         try:
             self.admin_config = load_config(ADMIN_CONFIG)
         except Exception as e:
@@ -149,17 +174,18 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
             DemoWorker(self.messages, include_dividends=True)
             if env == "DEMO"
             else BloombergWorker(
-                env, team, self.messages, self.commands, self.admin_config, LEDGER_PATH
+                env, team, self.messages, self.commands, self.admin_config, LEDGER_PATH,
+                auto_ack=self.auto_ack_enabled.get(),
             )
         )
         self.start_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
         self.env_ctrl.configure(state="disabled")
         self.team_ctrl.configure(state="disabled")
-        self.status.set("연결 중 / 자동 수신확인 해제")
+        self.status.set("연결 중 / " + self.arm_state.get())
         self._append(
             f"버전 {VERSION} / {env} 모니터링 시작 / "
-            f"구독 팀={team} / 자동 수신확인 해제"
+            f"구독 팀={team} / {self.arm_state.get()}"
         )
         self.monitoring = True
         self.worker.start()
@@ -266,15 +292,12 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
                 "Order와 Route의 초기 수신이 완료되고 Sequence 단절이 없어야 합니다.",
             )
             return
-        if not messagebox.askyesno(
-            "자동 수신확인 전송 확인",
-            f"신규 E2E ORD-PEND Order에 실제 SellSideAck 요청을 전송하시겠습니까?\n\n실행 환경: {self.env.get()}\n구독 팀: {self.team.get()}\nAccount 범위: 값이 있는 모든 Account\n생성일 범위: 서울 기준 오늘·전일 (화면 필터와 별도)\n최대 Shares: {self.admin_config['max_shares']}\n\n기존 Order는 처리하지 않습니다. 승인된 전송자 한 대만 실행하십시오.\n실제 Order 상태가 변경됩니다.",
-        ):
-            return
         self.commands.put({"action": "arm", "armed": True})
         self.arm_state.set("활성화 요청 중 · 응답 대기")
 
     def disarm_ack(self) -> None:
+        if hasattr(self, "auto_ack_enabled"):
+            self.auto_ack_enabled.set(False)
         self.armed = False
         self.arm_state.set("자동 수신확인 해제 · 신규 전송 차단")
         if self.worker and self.worker.is_alive() and self.env.get() != "DEMO":
@@ -309,6 +332,7 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
                         self._append(line)
                 elif typ == "ack_armed":
                     self.armed = bool(m.get("armed"))
+                    self.auto_ack_enabled.set(self.armed)
                     self.arm_state.set(
                         (
                             "자동 수신확인 활성화 · 신규 ORD-PEND만 처리"
@@ -324,6 +348,7 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
                     )
                 elif typ == "ack_disarmed":
                     self.armed = False
+                    self.auto_ack_enabled.set(False)
                     self.arm_state.set("안전장치에 의해 자동 수신확인 해제")
                     self._append("안전 해제: " + localize(m.get("reason", "")))
                 elif typ == "ack_batch":
@@ -372,7 +397,7 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
                     self._append("진단 로그 파일: " + m["path"])
                 elif typ == "optional_unavailable":
                     self.unavailable_fields.add(m["field"])
-                    self.book.clear_optional_field(m["field"])
+                    self.book.clear_optional_field(m["field"], m.get("feed"))
                     self.feed_warning.set(
                         "선택 필드 미제공: "
                         + ", ".join(sorted(self.unavailable_fields))
@@ -381,6 +406,7 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
                     self.book.stream_error = m["message"]
                     self.status.set("데이터 수신 오류 / 자동 수신확인 해제")
                     self.armed = False
+                    self.auto_ack_enabled.set(False)
                     self._append("오류: " + m["message"])
                 elif typ == "ended":
                     self.monitoring = False
@@ -391,8 +417,6 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
                     if not self.book.stream_error:
                         self.status.set("모니터링 중지 / 자동 수신확인 해제")
                     self.armed = False
-                    self.arm_btn.configure(state="disabled")
-                    self.disarm_btn.configure(state="disabled")
             self._render()
         finally:
             if not getattr(self, "_ui_destroyed", False):
@@ -470,11 +494,12 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
         self.eligible_ids = {row["seq"] for row in rows}
         period = 5 if self.adv_period.get() == "5D" else 20
         self.tabs["Routes"]["tree"].heading("adv_pct", text=f"ADV ({period}D)")
-        routes = [
+        actual_routes = [
             row
             for row in self.book.route_view(period)
             if row["seq"] in self.eligible_ids
         ]
+        routes = self.book.monitoring_view(rows, actual_routes)
         routes = sorted(
             routes,
             key=lambda row: (row["create_sort"], row["seq"], row["route_id"]),
@@ -486,7 +511,7 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
         for route in routes:
             parent = parents[route["seq"]]
             route.update(warning=parent["warning"], alert_types=parent["alert_types"])
-        stats = self.book.counters(rows, len(routes))
+        stats = self.book.counters(rows, len(actual_routes))
         self._annotate_market_rows(rows, routes)
         self._track_operational_events(rows)
         self._update_alarms(rows)
@@ -554,7 +579,7 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
                 if (
                     name == "배당 확인"
                     and self.only_alerts.get()
-                    and not x["dividend_risk"]
+                    and not x["corporate_action_risk"]
                 ):
                     continue
                 if (
@@ -572,30 +597,18 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
             # 고정된 행 식별자로 대량 Order 표시 시 깜박임을 줄인다.
             stale = set(tree.get_children())
             for idx, item in enumerate(visible):
-                cells = [
-                    format_adv(item.get(k))
-                    if k == "adv_pct"
-                    else item.get(k) or "—"
-                    if k == "dividend_ex_date"
-                    else f"{item.get(k, 0):,.1f}%"
-                    if k == "fill_pct"
-                    else f"{item[k]:,}"
-                    if k in ("qty", "filled", "remain", "routed", "remaining")
-                    and isinstance(item.get(k), int)
-                    else item.get(k, "")
-                    for k in cols
-                ]
+                cells = [display_cell(key, item) for key in cols]
                 iid = (
                     f"{item['seq']}:{item['route_id']}"
                     if name == "Routes"
                     else str(item["seq"])
                     if name == "배당 확인"
-                    else str(item["broker"])
+                    else str((item["broker"], item["currency"]))
                 )
                 tags = (
                     (
                         ("dividend",)
-                        if item["dividend_risk"]
+                        if item["corporate_action_risk"]
                         else ("odd" if idx % 2 else "even",)
                     )
                     if name == "배당 확인"
@@ -622,13 +635,6 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
             if isinstance(tree, PinnedTreeview):
                 tree.refresh_identity_widths()
         self._visible = items
-        healthy = (
-            stats["stream_ok"]
-            and self.monitoring
-            and self.worker
-            and self.worker.is_alive()
-            and self.env.get() != "DEMO"
-        )
         blockers = self._arm_blockers()
         if blockers:
             self.arm_blocker.set("활성화 불가: " + " | ".join(blockers))
@@ -640,10 +646,6 @@ class MonitorApp(DeskLayoutMixin, OperationsMixin):
             self.arm_blocker.set(
                 "데이터 수신 준비 완료 · 활성화 시 관리자 설정을 확인합니다. SellSideAck 전송 권한은 별도 확인이 필요합니다."
             )
-        self.arm_btn.configure(
-            state="normal" if healthy and not self.armed else "disabled"
-        )
-        self.disarm_btn.configure(state="normal" if self.armed else "disabled")
         self._render_acks()
         self._refresh_desk_status(rows, routes, stats)
 

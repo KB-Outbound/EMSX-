@@ -21,6 +21,7 @@ from risk_rules import (
 )
 from order_fields import client_instruction, creation_fields, sort_orders
 from dividend_rules import parse_ex_date
+from broker_notional import route_notional
 
 TERMINAL = {
     "FILLED",
@@ -33,6 +34,7 @@ TERMINAL = {
     "DELETED",
 }
 PENDING = {"NEW", "ASSIGN", "ASSIGNED", "WORKING"}
+UNROUTED_VISIBLE = PENDING | {"PENDING", "ORD-PEND", "HOLD"}
 ACTIVE_ROUTES = {
     "SENT",
     "WORKING",
@@ -61,6 +63,7 @@ LINE_STATUS = {
     "FILLED": "Filled",
     "COMPLETED": "Completed",
     "NEW": "New",
+    "PENDING": "Pending",
     "ORD-PEND": "Ord-pend",
     "SENT": "Sent",
     "HOLD": "Hold",
@@ -242,11 +245,24 @@ class DeskBook:
         self.updated = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     @synchronized
-    def clear_optional_field(self, field_name: str) -> None:
+    def clear_optional_field(self, field_name: str, feed: str | None = None) -> None:
         """선택 구독 종료 시 마지막 수신 값을 현재 값처럼 표시하지 않는다."""
-        if field_name not in {"EMSX_NOTES", "EMSX_BASKET_NAME", "EMSX_TIME"}:
+        if field_name not in {
+            "EMSX_NOTES",
+            "EMSX_BASKET_NAME",
+            "EMSX_TIME",
+            "EMSX_CURRENCY",
+            "EMSX_LIMIT_PRICE",
+        }:
             return
-        for record in [*self.orders.values(), *self.routes.values()]:
+        records = (
+            self.orders.values()
+            if feed == "O"
+            else self.routes.values()
+            if feed == "R"
+            else [*self.orders.values(), *self.routes.values()]
+        )
+        for record in records:
             record.fields.pop(field_name, None)
 
     @synchronized
@@ -273,15 +289,15 @@ class DeskBook:
                 "avg_volume_5d",
                 "avg_volume_20d",
                 "dividend_ex_date",
+                "split_date",
             }
         }
         if "iso_country" in values:
             values["iso_country"] = country_code(values["iso_country"])
-        if "dividend_ex_date" in values:
-            parsed = parse_ex_date(values["dividend_ex_date"])
-            values["dividend_ex_date"] = (
-                parsed.isoformat() if parsed is not None else None
-            )
+        for name in ("dividend_ex_date", "split_date"):
+            if name in values:
+                parsed = parse_ex_date(values[name])
+                values[name] = parsed.isoformat() if parsed is not None else None
         self.reference.setdefault(key, {}).update(values)
 
     @synchronized
@@ -368,6 +384,7 @@ class DeskBook:
                     "instruction": instruction,
                     "iso_country": iso_country,
                     "dividend_ex_date": text(metadata.get("dividend_ex_date")),
+                    "split_date": text(metadata.get("split_date")),
                     "basket_name": text(f.get("EMSX_BASKET_NAME")),
                     **creation_fields(f),
                     "brokers": ",".join(broker_codes),
@@ -403,11 +420,17 @@ class DeskBook:
             adv_pct = adv_5d if adv_period == 5 else adv_20d
             sec_type = text(metadata.get("sec_type"))
             check, reason = adv_check(client_instruction(pf), sec_type, adv_pct)
+            currency, notional = route_notional(
+                f, pf, qty, filled, text(f.get("EMSX_STATUS")).upper() in TERMINAL
+            )
             rows.append(
                 {
                     "seq": seq,
                     "route_id": rid,
                     "broker": text(f.get("EMSX_BROKER")),
+                    "currency": currency,
+                    "notional_value": notional,
+                    "is_unrouted": False,
                     "account": text(pf.get("EMSX_ACCOUNT")),
                     "ticker": text(pf.get("EMSX_TICKER")),
                     "side": text(pf.get("EMSX_SIDE")),
@@ -434,16 +457,51 @@ class DeskBook:
         return sorted(rows, key=lambda x: (x["broker"], x["seq"], x["route_id"]))
 
     @synchronized
+    def monitoring_view(
+        self,
+        orders: list[dict[str, Any]] | None = None,
+        routes: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """실제 Route에 미라우팅 Order를 보완하며 실제 Route 집계와 구분한다."""
+        orders = self.full_view() if orders is None else orders
+        routes = self.route_view() if routes is None else routes
+        result = [dict(row) for row in routes]
+        routed_ids = {seq for seq, _ in self.routes}
+        for row in orders:
+            if row["seq"] in routed_ids or row["status"] not in UNROUTED_VISIBLE:
+                continue
+            result.append(
+                {
+                    **row,
+                    "route_id": 0,
+                    "broker": "",
+                    "is_unrouted": True,
+                    "adv_pct": None,
+                    "adv_check": False,
+                    "adv_reason": "",
+                    "currency": "",
+                    "notional_value": None,
+                }
+            )
+        return result
+
+    @synchronized
     def broker_summary(
         self, routes: list[dict[str, Any]] | None = None
     ) -> list[dict[str, Any]]:
         brokers = {}
         for r in self.route_view() if routes is None else routes:
+            if r.get("is_unrouted"):
+                continue
             broker = r["broker"] or "(UNKNOWN)"
+            currency = r.get("currency", "")
             x = brokers.setdefault(
-                broker,
+                (broker, currency),
                 {
                     "broker": broker,
+                    "currency": currency,
+                    "known_notional": 0,
+                    "notional_missing": 0,
                     "routes": 0,
                     "routed": 0,
                     "filled": 0,
@@ -454,9 +512,22 @@ class DeskBook:
             x["routed"] += r["qty"]
             x["filled"] += r["filled"]
             x["remaining"] += r["remain"]
+            if r.get("notional_value") is None:
+                x["notional_missing"] += 1
+            else:
+                x["known_notional"] += r["notional_value"]
         return [
-            {**x, "fill_pct": safe_pct(x["filled"], x["routed"])}
-            for x in sorted(brokers.values(), key=lambda a: -a["routed"])
+            {
+                **x,
+                "notional_value": None
+                if x["notional_missing"]
+                else x["known_notional"],
+                "fill_pct": safe_pct(x["filled"], x["routed"]),
+            }
+            for x in sorted(
+                brokers.values(),
+                key=lambda a: (-a["routed"], a["broker"], a["currency"]),
+            )
         ]
 
     @synchronized

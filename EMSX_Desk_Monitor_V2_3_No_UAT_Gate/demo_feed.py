@@ -66,6 +66,9 @@ class DemoWorker(threading.Thread):
                     "dividend_ex_date": dividend_date.isoformat()
                     if dividend_date
                     else None,
+                    "split_date": target.isoformat()
+                    if target and seq == 820007
+                    else None,
                 },
             )
             self.emit(
@@ -80,6 +83,16 @@ class DemoWorker(threading.Thread):
                     "EMSX_SIDE": side,
                     "EMSX_AMOUNT": amount,
                     "EMSX_FILLED": filled,
+                    "EMSX_CURRENCY": "USD"
+                    if n > len(SAMPLE)
+                    else "JPY"
+                    if n in {1, 5}
+                    else "HKD"
+                    if n == 2
+                    else "TWD"
+                    if n == 3
+                    else "AUD",
+                    "EMSX_LIMIT_PRICE": 100.0,
                     "EMSX_STATUS": status,
                     "EMSX_TRADER": "DEMO",
                     "EMSX_NOTES": "T+2 / TWAP"
@@ -111,6 +124,8 @@ class DemoWorker(threading.Thread):
                     "EMSX_BROKER": broker,
                     "EMSX_AMOUNT": amount,
                     "EMSX_FILLED": filled,
+                    "EMSX_AVG_PRICE": 99.5 if filled else 0,
+                    "EMSX_LIMIT_PRICE": 100.0,
                     "EMSX_STATUS": status,
                 },
             )

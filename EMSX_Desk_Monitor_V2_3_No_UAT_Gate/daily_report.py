@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 import json
 import math
 import os
@@ -150,7 +151,7 @@ def _write_sheet(
                 ):
                     original = source[column - 1] if column <= len(source) else None
                     if (
-                        type(original) in (int, float)
+                        type(original) in (int, float, Decimal)
                         and abs(original) < 10**15
                         and math.isfinite(original)
                     ):
@@ -352,6 +353,7 @@ def export_daily(request: ReportRequest, events: EventRows) -> dict[str, Any]:
         "basket_name",
         "warning",
         "dividend_ex_date",
+        "split_date",
     ]
     route_keys = [
         "seq",
@@ -366,6 +368,8 @@ def export_daily(request: ReportRequest, events: EventRows) -> dict[str, Any]:
         "market_code",
         "market_status",
         "market_warning",
+        "currency",
+        "notional_value",
     ]
 
     def event_rows() -> Iterator[list[Any]]:
@@ -433,6 +437,7 @@ def export_daily(request: ReportRequest, events: EventRows) -> dict[str, Any]:
                 "Basket Name",
                 "Alerts",
                 "Dividend Ex Date",
+                "Split Date",
             ],
             [[row.get(key, "") for key in order_keys] for row in request.orders],
         ),
@@ -451,6 +456,8 @@ def export_daily(request: ReportRequest, events: EventRows) -> dict[str, Any]:
                 "Market",
                 "장 상태",
                 "휴장 확인",
+                "Currency",
+                "Notional Value",
             ],
             [[row.get(key, "") for key in route_keys] for row in request.routes],
         ),

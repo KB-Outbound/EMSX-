@@ -89,11 +89,11 @@ class DeskLayoutMixin:
             self.toolbar, text="중지", command=self.stop, state="disabled"
         )
         self.stop_btn.pack(side="left", padx=(0, 8))
-        self.arm_btn = ttk.Button(
+        self.arm_btn = ttk.Checkbutton(
             self.toolbar,
-            text="자동 Ack 해제",
+            text="자동 Ack ON",
+            variable=self.auto_ack_enabled,
             command=self._toggle_auto_ack,
-            state="disabled",
         )
         self.arm_btn.pack(side="left", padx=(0, 12))
         self.workspace_tabs = ttk.Frame(self.toolbar)
@@ -200,6 +200,9 @@ class DeskLayoutMixin:
                 "Brokers",
                 (
                     ("broker", "Broker", 150),
+                    ("currency", "Currency", 80),
+                    ("notional_value", "Notional Value", 180),
+                    ("notional_missing", "금액 미확인", 100),
                     ("routes", "Routes", 100),
                     ("routed", "Routed Qty", 140),
                     ("filled", "Filled Qty", 140),
@@ -229,7 +232,7 @@ class DeskLayoutMixin:
                         width=width,
                         minwidth=80,
                         stretch=True,
-                        anchor="w" if key == "broker" else "e",
+                        anchor="w" if key in {"broker", "currency"} else "e",
                     )
                 configure_rows(tree)
                 scroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
@@ -388,7 +391,6 @@ class DeskLayoutMixin:
         for row, (label, command) in enumerate(
             (
                 ("연결·기록 상태", self._show_connection_details),
-                ("자동 Ack 조건", self.show_arm_diagnostics),
                 ("설정 파일 위치", self.show_config),
             ),
             start=7,
@@ -396,10 +398,6 @@ class DeskLayoutMixin:
             ttk.Button(body, text=label, command=command).grid(
                 row=row, column=0, columnspan=2, sticky="ew", pady=3
             )
-        self.disarm_btn = ttk.Button(
-            body, text="자동 Ack 해제", command=self.disarm_ack, state="disabled"
-        )
-        self.disarm_btn.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(8, 0))
 
     def _show_settings(self) -> None:
         self.settings_window.deiconify()
@@ -425,15 +423,19 @@ class DeskLayoutMixin:
         )
 
     def _toggle_auto_ack(self) -> None:
-        if self.armed:
+        if not self.auto_ack_enabled.get():
             self.disarm_ack()
-            self.arm_btn.configure(text="자동 Ack 해제", style="TButton")
-        else:
-            if self.arm_state.get().startswith("활성화 요청"):
-                return
-            self.arm_ack()
-            if self.arm_state.get().startswith("활성화 요청"):
-                self.arm_btn.configure(text="자동 Ack 대기", state="disabled")
+            return
+        if self.env.get() == "DEMO":
+            self.auto_ack_enabled.set(False)
+            self.arm_state.set("DEMO · 자동 Ack 전송 없음")
+            return
+        if not self.monitoring or not self.worker or not self.worker.is_alive():
+            self.arm_state.set("자동 Ack 대기 · 연결 후 조건 확인")
+            return
+        # 초기 수신 중 ON 요청도 작업자에게 전달하여 준비 직후 한 번 처리한다.
+        self.commands.put({"action": "arm", "armed": True})
+        self.arm_state.set("활성화 요청 중 · 응답 대기")
 
     def _set_detail_columns(self) -> None:
         enabled = self.detail_columns.get()
@@ -465,24 +467,9 @@ class DeskLayoutMixin:
         self.status_badge.configure(
             style="Error.Connection.TLabel" if broken else "Connection.TLabel"
         )
-        pending = (
-            self.arm_state.get().startswith("활성화 요청")
-            and self.monitoring
-            and running
-            and not broken
-        )
         self.arm_btn.configure(
-            text="자동 Ack 활성"
-            if self.armed
-            else "자동 Ack 대기"
-            if pending
-            else "자동 Ack 해제",
-            state="normal"
-            if self.armed
-            else "disabled"
-            if pending
-            else self.arm_btn.cget("state"),
-            style="Active.TButton" if self.armed else "TButton",
+            text="자동 Ack ON" if self.auto_ack_enabled.get() else "자동 Ack OFF",
+            state="disabled" if self.env.get() == "DEMO" else "normal",
         )
         self.visible_counts.set(
             f"Order {stats['orders']:,}  ·  Route {stats['routes']:,}  ·  "
@@ -493,6 +480,7 @@ class DeskLayoutMixin:
         adv = sum(bool(row.get("adv_check")) for row in routes)
         holidays = sum(bool(row.get("market_warning")) for row in rows)
         dividends = sum(bool(row.get("dividend_risk")) for row in rows)
+        splits = sum(bool(row.get("split_risk")) for row in rows)
         other = sum(
             bool(set(row["alert_types"]) - {"Unrouted Warning", "No-Fill Alert"})
             for row in rows
@@ -505,6 +493,7 @@ class DeskLayoutMixin:
                 ("ADV", adv),
                 ("휴장", holidays),
                 ("배당", dividends),
+                ("Split", splits),
                 ("Alerts", other),
             )
             if count

@@ -180,33 +180,104 @@ class TestCompactLayout(TestCase):
             self.assertEqual(self.app.nb.tab(self.app.nb.select(), "text"), label)
         self.assertEqual(table.selection(), (iid,))
 
-    def test_armed_toggle_remains_available_to_disarm_and_pending_is_disabled(
+    def test_single_default_on_toggle_can_be_turned_off_while_waiting(
         self,
     ) -> None:
+        self.assertIsInstance(self.app.arm_btn, ttk.Checkbutton)
+        self.assertTrue(self.app.auto_ack_enabled.get())
+        self.assertFalse(hasattr(self.app, "disarm_btn"))
         self.app.armed = True
         self.app._render()
         self.assertEqual(str(self.app.arm_btn.cget("state")), "normal")
-        self.assertEqual(self.app.arm_btn.cget("text"), "자동 Ack 활성")
-        with (
-            patch.object(self.app, "disarm_ack") as disarm,
-            patch.object(self.app, "arm_ack") as arm,
-        ):
-            self.app.arm_btn.invoke()
-            disarm.assert_called_once()
-            arm.assert_not_called()
+        self.assertEqual(self.app.arm_btn.cget("text"), "자동 Ack ON")
+        self.app.arm_btn.invoke()
+        self.assertFalse(self.app.auto_ack_enabled.get())
+        self.assertFalse(self.app.armed)
         self.app.armed = False
         self.app.monitoring = True
         self.app.worker = SimpleNamespace(is_alive=lambda: True)
+        self.app.auto_ack_enabled.set(True)
         self.app.arm_state.set("활성화 요청 중 · 응답 대기")
         self.app._render()
-        self.assertEqual(str(self.app.arm_btn.cget("state")), "disabled")
-        self.assertEqual(self.app.arm_btn.cget("text"), "자동 Ack 대기")
-        with patch.object(self.app, "arm_ack") as arm:
-            self.app._toggle_auto_ack()
-            arm.assert_not_called()
+        self.assertEqual(str(self.app.arm_btn.cget("state")), "normal")
+        self.app.arm_btn.invoke()
+        self.assertEqual(
+            self.app.commands.get_nowait(), {"action": "arm", "armed": False}
+        )
         self.app.monitoring = False
         self.app._render()
-        self.assertEqual(self.app.arm_btn.cget("text"), "자동 Ack 해제")
+        self.assertEqual(self.app.arm_btn.cget("text"), "자동 Ack OFF")
+
+    def test_unrouted_identity_is_replaced_when_the_first_route_arrives(self) -> None:
+        iid = self.seed_route()
+        self.app.book.ingest("R", 8, {"EMSX_SEQUENCE": 1, "EMSX_ROUTE_ID": 1})
+        self.app.book.ingest("O", 7, {"EMSX_SEQUENCE": 1, "EMSX_STATUS": "PENDING"})
+        self.app._render()
+        table = self.app.tabs["Routes"]["tree"]
+        self.assertEqual(table.get_children(), ("1:0",))
+        self.assertIn("KB_FUND_01", table.item("1:0", "values"))
+        self.assertIn("7203 JP Equity", table.item("1:0", "values"))
+        self.assertIn("Pending", table.item("1:0", "values"))
+        self.assertIn("Route 0", self.app.visible_counts.get())
+        self.assertEqual(self.app.tabs["Brokers"]["tree"].get_children(), ())
+        self.seed_route()
+        self.assertEqual(table.get_children(), (iid,))
+
+    def test_toggle_matches_latest_worker_response_after_rapid_off_on(self) -> None:
+        self.app.monitoring = True
+        self.app.worker = SimpleNamespace(is_alive=lambda: True)
+        self.app.messages.put({"type": "ack_armed", "armed": False})
+        self.app.messages.put({"type": "ack_armed", "armed": True})
+        self.app._pump()
+        self.assertTrue(self.app.armed)
+        self.assertTrue(self.app.auto_ack_enabled.get())
+        self.assertEqual(self.app.arm_btn.cget("text"), "자동 Ack ON")
+        self.app.messages.put({"type": "ack_armed", "armed": False})
+        self.app._pump()
+        self.assertFalse(self.app.armed)
+        self.assertFalse(self.app.auto_ack_enabled.get())
+        self.assertEqual(self.app.arm_btn.cget("text"), "자동 Ack OFF")
+
+    def test_broker_currency_and_notional_are_visible_and_missing_price_is_explicit(
+        self,
+    ) -> None:
+        self.seed_route()
+        self.app.book.ingest(
+            "O",
+            7,
+            {
+                "EMSX_SEQUENCE": 1,
+                "EMSX_CURRENCY": "USD",
+                "EMSX_LIMIT_PRICE": 200,
+            },
+        )
+        self.app.book.ingest(
+            "R",
+            7,
+            {
+                "EMSX_SEQUENCE": 1,
+                "EMSX_ROUTE_ID": 1,
+                "EMSX_AVG_PRICE": 199.5,
+            },
+        )
+        self.app._render()
+        tree = self.app.tabs["Brokers"]["tree"]
+        iid = tree.get_children()[0]
+        self.assertEqual(tree.set(iid, "currency"), "USD")
+        self.assertEqual(tree.set(iid, "notional_value"), "199,950.00")
+        self.assertEqual(tree.set(iid, "notional_missing"), "0")
+        self.app.book.ingest(
+            "R",
+            7,
+            {
+                "EMSX_SEQUENCE": 1,
+                "EMSX_ROUTE_ID": 1,
+                "EMSX_LIMIT_PRICE": 0,
+            },
+        )
+        self.app._render()
+        self.assertEqual(tree.set(iid, "notional_value"), "—")
+        self.assertEqual(tree.set(iid, "notional_missing"), "1")
 
     def test_journal_error_is_visible_and_connectivity_is_not_shown_as_live(
         self,

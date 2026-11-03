@@ -56,7 +56,16 @@ BASE_ORDER_FIELDS = [
     for field in ORDER_FIELDS
     if field not in OPTIONAL_ORDER_FIELDS and field != "EMSX_SEQUENCE"
 ]
-ENRICHMENT_FIELDS = {903: "EMSX_NOTES", 904: "EMSX_BASKET_NAME", 905: "EMSX_TIME"}
+ENRICHMENT_FIELDS = {
+    903: "EMSX_NOTES",
+    904: "EMSX_BASKET_NAME",
+    905: "EMSX_TIME",
+    906: "EMSX_CURRENCY",
+    907: "EMSX_LIMIT_PRICE",
+    908: "EMSX_LIMIT_PRICE",
+    909: "EMSX_CURRENCY",
+}
+ROUTE_ENRICHMENT_IDS = {908, 909}
 EVENT_DRAIN_SECONDS = 0.025
 
 INT_FIELDS = {
@@ -74,7 +83,7 @@ INT_FIELDS = {
     "EMSX_ROUTE_CREATE_DATE",
     "EMSX_ROUTE_CREATE_TIME",
 }
-FLOAT_FIELDS = {"EMSX_AVG_PRICE"}
+FLOAT_FIELDS = {"EMSX_AVG_PRICE", "EMSX_LIMIT_PRICE"}
 
 
 def read_field(
@@ -101,6 +110,7 @@ class BloombergWorker(threading.Thread):
         commands: queue.Queue | None = None,
         config: dict[str, Any] | None = None,
         ledger_path: str | Path | None = None,
+        auto_ack: bool = False,
     ) -> None:
         super().__init__(daemon=True)
         self.environment = environment
@@ -126,11 +136,16 @@ class BloombergWorker(threading.Thread):
         self.queue_timeout = 0.1
         self.order_fields = list(BASE_ORDER_FIELDS)
         self.optional_disabled: set[str] = set()
+        self.optional_disabled_ids: set[int] = set()
         self.enrichment_enabled = True
         self.enrichment_requested = False
         self.warning_times: dict[str, float] = {}
         self.enrichment_orders: dict[int, dict[str, Any]] = {}
+        self.enrichment_routes: dict[tuple[int, int], dict[str, Any]] = {}
+        self.known_routes: set[tuple[int, int]] = set()
         self.enrichment_seq: dict[int, int] = {}
+        self.auto_ack_requested = auto_ack
+        self._auto_arm_pending = auto_ack
 
     def emit(self, typ: str, **kwargs: Any) -> None:
         try:
@@ -201,6 +216,14 @@ class BloombergWorker(threading.Thread):
             fields.update(self.enrichment_orders.get(order_id, {}))
             if status == 8:
                 self.enrichment_orders.pop(order_id, None)
+        if feed == "R" and order_id is not None and "EMSX_ROUTE_ID" in fields:
+            route_key = (order_id, fields["EMSX_ROUTE_ID"])
+            fields.update(self.enrichment_routes.get(route_key, {}))
+            if status == 8:
+                self.enrichment_routes.pop(route_key, None)
+                self.known_routes.discard(route_key)
+            elif status in (4, 6, 7):
+                self.known_routes.add(route_key)
         if invalid:
             LOGGER.warning(
                 "메시지 파싱 경고: 구독=%s 이벤트=%s 순번=%s 필드=%s",
@@ -230,6 +253,8 @@ class BloombergWorker(threading.Thread):
             self.snapshot_done[feed] = True
             self.emit("data", feed=feed, status=status, fields=fields)
             self.engine.set_ready(self._ready())
+            self._commands()
+            self._maybe_auto_arm()
             return
         if status == 1:
             self.emit("data", feed=feed, status=status, fields=fields)
@@ -244,6 +269,7 @@ class BloombergWorker(threading.Thread):
                     fields.get("EMSX_SEQUENCE"), "FIELD_PARSE_WARNING"
                 )
             self.engine.set_ready(self._ready())
+            self._maybe_auto_arm()
             self.engine.on_order(status, fields, self.snapshot_done["O"], self._ready())
             if self.reference and status in (4, 6, 7):
                 order = self.engine.orders.get(order_id, {})
@@ -268,12 +294,20 @@ class BloombergWorker(threading.Thread):
     def _handle_enrichment(self, msg: Any, cid: int) -> None:
         """선택 필드는 별도 순번을 사용하고 기본 Order를 생성하거나 Ack하지 않는다."""
         field = ENRICHMENT_FIELDS[cid]
-        if field in self.optional_disabled:
+        if cid in self.optional_disabled_ids:
             return
         invalid: set[str] = set()
         status = read_field(msg, "EVENT_STATUS", invalid.add)
         sequence = read_field(msg, "API_SEQ_NUM", invalid.add)
         order_id = read_field(msg, "EMSX_SEQUENCE", invalid.add)
+        feed = "R" if cid in ROUTE_ENRICHMENT_IDS else "O"
+        route_id = (
+            read_field(msg, "EMSX_ROUTE_ID", invalid.add) if feed == "R" else None
+        )
+        if feed == "R" and route_id is None:
+            return
+        cache = self.enrichment_routes if feed == "R" else self.enrichment_orders
+        key = (order_id, route_id) if feed == "R" else order_id
         if sequence is not None:
             previous = self.enrichment_seq.get(cid)
             if previous is not None and sequence <= previous:
@@ -287,7 +321,7 @@ class BloombergWorker(threading.Thread):
         if status not in (4, 6, 7, 8) or order_id is None:
             return
         if status == 8:
-            self.enrichment_orders.pop(order_id, None)
+            cache.pop(key, None)
             return
         value = read_field(msg, field, invalid.add)
         if invalid:
@@ -295,20 +329,31 @@ class BloombergWorker(threading.Thread):
                 "extra-parse-" + field, f"{field} 선택 필드 파싱 실패 · 기본 수신 유지"
             )
         if value is None:
-            return
-        if (
-            order_id not in self.enrichment_orders
-            and len(self.enrichment_orders) >= 100000
-        ):
+            if field not in {"EMSX_LIMIT_PRICE", "EMSX_CURRENCY"} or not msg.hasElement(
+                field
+            ):
+                return
+            # 명시적인 null·손상 값은 이전 가격으로 금액을 계산하지 않게 지운다.
+            value = 0 if field == "EMSX_LIMIT_PRICE" else ""
+        if key not in cache and len(cache) >= 100000:
             self._warn("extra-limit", "선택 필드 캐시 한도 초과 · 기본 수신 유지")
             return
-        self.enrichment_orders.setdefault(order_id, {})[field] = value
-        if self.engine is not None and order_id in self.engine.orders:
+        cache.setdefault(key, {})[field] = value
+        known = (
+            key in self.known_routes
+            if feed == "R"
+            else (self.engine is not None and order_id in self.engine.orders)
+        )
+        if known:
             self.emit(
                 "data",
-                feed="O",
+                feed=feed,
                 status=7,
-                fields={"EMSX_SEQUENCE": order_id, field: value},
+                fields={
+                    "EMSX_SEQUENCE": order_id,
+                    field: value,
+                    **({"EMSX_ROUTE_ID": route_id} if feed == "R" else {}),
+                },
             )
 
     def _subscribe_enrichment(self, A: Any, service: str) -> None:
@@ -318,19 +363,32 @@ class BloombergWorker(threading.Thread):
                 subscriptions = A.SubscriptionList()
                 subscriptions.add(
                     topic=team_topic(
-                        service, "order", ["API_SEQ_NUM", field], self.team
+                        service,
+                        "route" if cid in ROUTE_ENRICHMENT_IDS else "order",
+                        ["API_SEQ_NUM", field],
+                        self.team,
                     ),
                     correlationId=A.CorrelationId(cid),
                 )
                 self.session.subscribe(subscriptions)
             except Exception:
-                self.optional_disabled.add(field)
+                self._disable_enrichment(cid)
                 LOGGER.error("선택 필드 구독 요청 실패: 필드=%s", field, exc_info=True)
-                self.emit("optional_unavailable", field=field)
                 self._warn(
                     "extra-request-" + field,
                     f"{field} 선택 구독 요청 실패 · 기본 수신 유지",
                 )
+
+    def _disable_enrichment(self, cid: int) -> None:
+        """동일 필드의 Order·Route 구독을 구분하여 실패한 값만 무효화한다."""
+        field = ENRICHMENT_FIELDS[cid]
+        self.optional_disabled.add(field)
+        self.optional_disabled_ids.add(cid)
+        feed = "R" if cid in ROUTE_ENRICHMENT_IDS else "O"
+        cache = self.enrichment_routes if feed == "R" else self.enrichment_orders
+        for values in cache.values():
+            values.pop(field, None)
+        self.emit("optional_unavailable", field=field, feed=feed)
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -406,16 +464,33 @@ class BloombergWorker(threading.Thread):
             except queue.Empty:
                 return
             if cmd.get("action") == "arm" and self.engine:
+                self.auto_ack_requested = bool(cmd.get("armed"))
+                self._auto_arm_pending = self.auto_ack_requested and not self._ready()
                 self.engine.set_ready(self._ready())
-                self.engine.set_arm(bool(cmd.get("armed")))
+                if not self._auto_arm_pending:
+                    self.engine.set_arm(self.auto_ack_requested)
             elif cmd.get("action") == "stop":
                 self.stop_event.set()
                 if self.engine:
                     self.engine.set_arm(False)
 
+    def _maybe_auto_arm(self) -> None:
+        """초기 수신 완료 직후 한 번만 활성화를 시도하고 스냅샷은 제외한다."""
+        if (
+            self._auto_arm_pending
+            and self.engine
+            and self._ready()
+            and not self.stop_event.is_set()
+        ):
+            self._auto_arm_pending = False
+            self.engine.set_ready(True)
+            self.engine.set_arm(True, source="STARTUP_AUTO_ARM")
+
     def _trip(self, reason: str) -> None:
         LOGGER.error("수신 안전 차단: %s", reason)
         self.feed_error = True
+        self.auto_ack_requested = False
+        self._auto_arm_pending = False
         self.reconnect_requested = True
         if self.engine:
             self.engine.disarm(reason)
@@ -478,8 +553,10 @@ class BloombergWorker(threading.Thread):
             except Exception:
                 LOGGER.exception("세션 자원 정리 실패")
         self.engine = self.session = self.ledger = self.service = None
-        self.reference = None
         self.enrichment_orders.clear()
+        self.enrichment_routes.clear()
+        self.known_routes.clear()
+        self.reference = None
         self.enrichment_seq.clear()
 
     def run(self) -> None:
@@ -517,8 +594,11 @@ class BloombergWorker(threading.Thread):
                 self.feed_error = False
                 self.reconnect_requested = False
                 self.enrichment_orders.clear()
+                self.enrichment_routes.clear()
+                self.known_routes.clear()
                 self.enrichment_seq.clear()
                 self.optional_disabled.clear()
+                self.optional_disabled_ids.clear()
                 self.enrichment_requested = False
                 started_at = time.monotonic()
                 try:
@@ -529,13 +609,15 @@ class BloombergWorker(threading.Thread):
                             break
                         if command.get("action") == "stop":
                             self.stop_event.set()
+                        elif command.get("action") == "arm":
+                            self.auto_ack_requested = bool(command.get("armed"))
+                            self._auto_arm_pending = self.auto_ack_requested
                     if self.stop_event.is_set():
                         break
                     self.emit("reset")
                     if not self.enrichment_enabled:
-                        for field in ENRICHMENT_FIELDS.values():
-                            self.optional_disabled.add(field)
-                            self.emit("optional_unavailable", field=field)
+                        for cid in ENRICHMENT_FIELDS:
+                            self._disable_enrichment(cid)
                         self._warn(
                             "core-only",
                             "구독 호환성을 위해 기본 Order·Route만 복구합니다",
@@ -689,10 +771,7 @@ class BloombergWorker(threading.Thread):
                         )
                         if cid in ENRICHMENT_FIELDS:
                             field = ENRICHMENT_FIELDS[cid]
-                            self.optional_disabled.add(field)
-                            for cached in self.enrichment_orders.values():
-                                cached.pop(field, None)
-                            self.emit("optional_unavailable", field=field)
+                            self._disable_enrichment(cid)
                             self._warn(
                                 "extra-failure-" + field,
                                 f"{field} 선택 구독 거부: {reason} · 기본 수신 유지",
@@ -757,6 +836,7 @@ class BloombergWorker(threading.Thread):
                 self._subscribe_enrichment(A, service)
             if self.engine:
                 self._commands()
+                self._maybe_auto_arm()
                 self.engine.check_pending()
                 if not self.stop_event.is_set() and not self.reconnect_requested:
                     # 이미 도착한 이벤트를 먼저 반영하여 이벤트별 단건 전송을 막는다.

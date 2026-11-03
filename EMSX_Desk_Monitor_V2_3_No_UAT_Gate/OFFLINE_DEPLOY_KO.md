@@ -283,3 +283,22 @@ python windows_build.py build
 배당락일 자체는 Bloomberg 연결 후 기존 참조데이터 서비스의 `DVD_EX_DT` 권한·응답을 사용합니다.
 시작 Event Log의 `버전 2.9.0`과 `빌드·독립 실행 검사 완료` 출력을 확인하십시오.
 총 255개 테스트와 Linux Tk DEMO를 검증했으며 실제 Windows·Bloomberg 확인은 대상 PC에서 수행합니다.
+
+
+## 2.10.0 미라우팅·Split·Broker 금액·자동 Ack 적용
+
+새 `broker_notional.py`와 기존 `dividend_rules.py`를 포함한 전체 소스·자산을 교체합니다.
+관리자 설정·Ack DB·일지·wheelhouse는 보존하며 추가 패키지 설치는 필요하지 않습니다.
+관리자 전송 허용 값은 이 버전에서 자동 변경하지 않습니다.
+자동 Ack 토글은 기본 ON이며 초기 수신 후 기존 전송 허용 조건을 검사합니다.
+
+프로젝트 폴더에서 아래 명령을 한 줄로 실행합니다.
+
+```bat
+python windows_build.py build
+```
+
+시작 Event Log의 `버전 2.10.0`과 `빌드·독립 실행 검사 완료` 출력을 확인합니다.
+배당 확인의 Split Date·Brokers의 Currency 및 Notional Value·Routes의 미라우팅 행을 DEMO에서 확인할 수 있습니다.
+Windows 실행 파일·실제 Bloomberg 필드 응답·전송 권한은 대상 PC 검증이 필요합니다.
+세부 규칙과 검증은 [개선 안내](DESK_ENHANCEMENTS_KO.md)를 참조하십시오.

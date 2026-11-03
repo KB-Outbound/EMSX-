@@ -13,7 +13,7 @@ from typing import Any
 import unittest
 from unittest.mock import Mock, patch
 
-from dividend_rules import DIVIDEND_ALERT
+from dividend_rules import DIVIDEND_ALERT, SPLIT_ALERT
 from emsx_desk_monitor import MonitorApp
 from market_sessions import MarketCalendar
 
@@ -94,7 +94,7 @@ class TestDividendView(unittest.TestCase):
         self.app._render()
         self.root.update()
 
-    def test_tab_is_next_to_ack_and_has_exactly_eight_visible_columns(self) -> None:
+    def test_tab_is_next_to_ack_and_has_exactly_nine_visible_columns(self) -> None:
         labels = [self.app.nb.tab(page, "text") for page in self.app.nb.tabs()]
         self.assertEqual(labels[labels.index("자동 수신확인(Ack)") + 1], "배당 확인")
         self.assertEqual(
@@ -115,6 +115,7 @@ class TestDividendView(unittest.TestCase):
                 "Instruction",
                 "Basket Name",
                 "Dividend Ex Date",
+                "Split Date",
             ],
         )
         self.assertNotIn("seq", self.tree["columns"])
@@ -156,6 +157,30 @@ class TestDividendView(unittest.TestCase):
         self.assertEqual(self.tree.get_children(), ("1",))
         self.assertNotIn("dividend", self.tree.item("1", "tags"))
         self.assertEqual(self.app.dividend_target_date, date(2026, 11, 3))
+
+    def test_split_only_risk_is_pinned_filtered_and_audited_then_cleared(self) -> None:
+        self.order(1, None, hour=8)
+        self.order(2, "2026-11-03", hour=14)
+        self.app.book.update_reference("TEST1 US Equity", {"split_date": "2026-11-02"})
+        self.render()
+        self.assertEqual(self.tree.get_children(), ("1", "2"))
+        self.assertEqual(self.tree.item("1", "tags"), ("dividend",))
+        self.assertEqual(self.tree.item("1", "values")[-1], "2026-11-02")
+        self.app.only_alerts.set(True)
+        self.render()
+        self.assertEqual(self.tree.get_children(), ("1",))
+        self.assertEqual(self.tree.xview(), (0.0, 1.0))
+        records = [
+            call.args[1]
+            for call in self.app._journal_event.call_args_list
+            if call.args[0] == "Alert 표시 시작"
+        ]
+        self.assertEqual(records[0]["alert"], SPLIT_ALERT)
+        self.assertEqual(records[0]["target_date"], "2026-11-02")
+        self.assertEqual(records[0]["split_date"], "2026-11-02")
+        self.app.book.update_reference("TEST1 US Equity", {"split_date": None})
+        self.render()
+        self.assertEqual(self.tree.get_children(), ())
 
     def test_reference_clearing_removes_risk_without_disarming_ack_or_sounding(
         self,
@@ -202,7 +227,7 @@ class TestDividendView(unittest.TestCase):
         self.assertEqual(payload["dividend_ex_date"], "2026-11-02")
         self.assertEqual(payload["qty"], 1000)
 
-    def test_csv_exports_only_the_eight_dividend_columns_and_filtered_rows(
+    def test_csv_exports_only_the_nine_dividend_columns_and_filtered_rows(
         self,
     ) -> None:
         self.order(1, "2026-11-02")
@@ -219,7 +244,7 @@ class TestDividendView(unittest.TestCase):
             self.app.export()
         with open(path, encoding="utf-8-sig", newline="") as stream:
             rows = list(csv.reader(stream))
-        self.assertEqual(len(rows[0]), 8)
+        self.assertEqual(len(rows[0]), 9)
         self.assertEqual(len(rows), 2)
-        self.assertEqual(rows[1][-1], "2026-11-02")
+        self.assertEqual(rows[1][-2], "2026-11-02")
         self.assertNotIn("seq", rows[0])

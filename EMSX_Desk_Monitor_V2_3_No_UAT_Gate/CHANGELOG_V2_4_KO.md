@@ -214,3 +214,16 @@ python -m unittest discover -s tests -v
 - 배당 위험은 기존 음향·자동 Ack 조건과 분리하고 기준일·대상 영업일·배당락일을 일지에 기록합니다. 8개 열 CSV·Order 메모와 기존 Excel의 배당락일 열을 지원합니다.
 - 앱 DEMO에 배당 샘플을 활성화하되 기존 `DemoWorker(output)` 기본 동작과 5개 샘플을 보존했습니다. 종료 시 예약된 수신 펌프를 취소해 종료 뒤 Tcl 콜백이 남지 않게 했습니다.
 - 제품 버전을 2.9.0으로 갱신했습니다. 설정·DB·의존성 이관은 필요하지 않습니다. 총 255개 테스트·정적 검사·한국어 Tk DEMO 수신·표시·일지 및 작업자 종료를 검증했습니다. Windows EXE·실제 Bloomberg 응답은 대상 PC 확인이 필요합니다.
+
+
+## 2.10.0 미라우팅 표시·Split·Broker 금액·자동 Ack 간소화
+
+- Routes에 Route 없는 New·Pending·Ord-pend 등 활성 Order를 보완합니다. 실제 Route 수신 시 미라우팅 행을 교체하며 가짜 Route를 건수·Broker 집계에 넣지 않습니다.
+- 배당 확인에 Split Date를 추가하고 미국 T+2의 배당락일 또는 Split Date가 다음 NYSE 영업일이면 상단 고정·강조합니다. KST 날짜·주말·NYSE 휴장 기준을 유지합니다.
+- `EQY_SPLIT_DT`를 비동기 참조데이터에서 검증합니다. `DV_017`·`DV017` ID 표기 차이를 지원하며 날짜 오류는 해당 필드만 보류합니다.
+- Brokers에 Currency·Notional Value·금액 미확인을 추가합니다. 체결 금액과 잔여 Limit 금액을 Decimal로 계산하고 통화별로 구분하며 GBp·GBX를 GBP로 변환합니다.
+- Order·Route 가격·통화를 별도 선택 구독으로 수신하고 각 구독의 거부·null·손상 값을 격리합니다. Route 필드 오류가 정상 Order 참조값을 제거하지 않습니다.
+- 자동 Ack를 기본 ON 단일 토글로 간소화합니다. 초기 수신 후 한 번 활성화를 시도하며 기존 관리자 전송 허용·중복 방지·감사 저장·신규 주문·단일 배치 조건은 유지합니다. 중복 ON은 대기 목록을 보존하며 OFF·치명적 세션 실패는 자동 재활성화하지 않습니다.
+- CSV·Excel·감사 기록과 DEMO를 확장했습니다. 새 외부 의존성·설정 키·DB 이관은 없습니다. 상세 절차는 [개선 안내](DESK_ENHANCEMENTS_KO.md)를 참조하십시오.
+
+- 검증: 278개 전체 테스트·정적 검사·실제 한국어 Tk DEMO 수신·표시·종료·CSV·Excel 저장 및 독립 Excel 판독을 통과했습니다. Windows EXE·Bloomberg 실제 응답은 대상 PC 확인이 필요합니다.

@@ -184,6 +184,90 @@ class TestMessageIsolation(unittest.TestCase):
         self.engine.flush_batch(force=True)
         self.sent.assert_called_once()
 
+    def test_route_optional_price_is_cached_without_creating_a_phantom_route(
+        self,
+    ) -> None:
+        self.worker._handle_data_message(
+            Message(
+                {
+                    "EVENT_STATUS": 4,
+                    "EMSX_SEQUENCE": 111,
+                    "EMSX_ROUTE_ID": 7,
+                    "EMSX_LIMIT_PRICE": "123.45",
+                },
+                cid=908,
+            )
+        )
+        self.assertTrue(self.output.empty())
+        self.worker._handle_data_message(
+            Message(
+                {
+                    "EVENT_STATUS": 4,
+                    "EMSX_SEQUENCE": 111,
+                    "EMSX_ROUTE_ID": 7,
+                    "EMSX_AMOUNT": 100,
+                    "EMSX_STATUS": "WORKING",
+                },
+                cid=902,
+            )
+        )
+        item = self.output.get_nowait()
+        self.assertEqual(item["feed"], "R")
+        self.assertEqual(item["fields"]["EMSX_LIMIT_PRICE"], 123.45)
+        self.assertTrue(self.engine.armed)
+
+    def test_route_currency_rejection_preserves_order_currency_subscription(
+        self,
+    ) -> None:
+        self.engine.orders[111] = dict(ORDER)
+        self.worker.enrichment_orders[111] = {"EMSX_CURRENCY": "USD"}
+        self.worker.enrichment_routes[(111, 7)] = {"EMSX_CURRENCY": "USD"}
+        self.worker._disable_enrichment(909)
+        self.assertNotIn("EMSX_CURRENCY", self.worker.enrichment_routes[(111, 7)])
+        self.assertEqual(self.worker.enrichment_orders[111]["EMSX_CURRENCY"], "USD")
+        while not self.output.empty():
+            self.output.get_nowait()
+        self.worker._handle_data_message(
+            Message(
+                {
+                    "EVENT_STATUS": 7,
+                    "EMSX_SEQUENCE": 111,
+                    "EMSX_CURRENCY": "JPY",
+                },
+                cid=906,
+            )
+        )
+        item = self.output.get_nowait()
+        self.assertEqual(item["feed"], "O")
+        self.assertEqual(item["fields"]["EMSX_CURRENCY"], "JPY")
+        self.assertTrue(self.engine.armed)
+
+    def test_null_or_boolean_route_price_is_cleared_without_disarming(self) -> None:
+        self.worker.known_routes.add((111, 7))
+        for value in (None, True):
+            with self.subTest(value=value):
+                message = Message(
+                    {
+                        "EVENT_STATUS": 7,
+                        "EMSX_SEQUENCE": 111,
+                        "EMSX_ROUTE_ID": 7,
+                        "EMSX_LIMIT_PRICE": value,
+                    },
+                    cid=908,
+                )
+                if value is True:
+                    with self.assertLogs("emsx", level="WARNING"):
+                        self.worker._handle_data_message(message)
+                else:
+                    self.worker._handle_data_message(message)
+                events = []
+                while not self.output.empty():
+                    events.append(self.output.get_nowait())
+                data = [event for event in events if event["type"] == "data"]
+                self.assertEqual(data[-1]["fields"]["EMSX_LIMIT_PRICE"], 0)
+                self.assertTrue(self.engine.armed)
+        self.assertFalse(self.worker.feed_error)
+
     def test_bad_mandatory_field_blocks_only_affected_order(self) -> None:
         with self.assertLogs("emsx", logging.WARNING):
             self.worker._handle_data_message(
@@ -380,7 +464,7 @@ class TestInitializationIntegration(unittest.TestCase):
             try:
                 with self.assertLogs("emsx", logging.WARNING):
                     worker._run_session(api)
-                self.assertEqual(len(topics), 5)
+                self.assertEqual(len(topics), 9)
                 self.assertNotIn("EMSX_BASKET_NAME", topics[0]["topic"])
                 self.assertIn("EMSX_DATE", topics[0]["topic"])
                 self.assertEqual(worker.optional_disabled, {"EMSX_BASKET_NAME"})

@@ -98,6 +98,7 @@ class TestReferenceData(unittest.TestCase):
             "DS290": "COUNTRY_ISO",
             "DS213": "SECURITY_TYP",
             "DV018": "DVD_EX_DT",
+            "DV017": "EQY_SPLIT_DT",
         }
         self.feed.handle_response(
             Message(
@@ -138,7 +139,9 @@ class TestReferenceData(unittest.TestCase):
         self.prepare()
         request, cid = self.sent[0]
         self.assertEqual(request.name, "FieldInfoRequest")
-        self.assertEqual(set(request.fields["id"]), set(FIELD_IDS))
+        self.assertEqual(
+            set(request.fields["id"]), (set(FIELD_IDS) - {"DV_017"}) | {"EQY_SPLIT_DT"}
+        )
         self.assertEqual(cid, FIELD_INFO_CID)
         request, cid = self.sent[1]
         self.assertEqual(request.name, "ReferenceDataRequest")
@@ -235,6 +238,49 @@ class TestReferenceData(unittest.TestCase):
         self.clock[0] = 21
         self.feed.tick()
         self.assertIsNone(self.emitted[-1][1]["fields"]["dividend_ex_date"])
+
+    def test_split_id_alias_native_date_and_exception_are_isolated(self) -> None:
+        self.prepare()
+        self.assertEqual(self.feed.mnemonics["DV_017"], "EQY_SPLIT_DT")
+        response = self.data()
+        response["securityData"][0]["fieldData"]["EQY_SPLIT_DT"] = date(2026, 11, 4)
+        cid = self.feed.pending[0]
+        self.feed.handle_response(Message(response, cid), final=False)
+        self.feed.handle_response(
+            Message(
+                {
+                    "securityData": [
+                        {
+                            "security": "TEST JP Equity",
+                            "fieldExceptions": [{"fieldId": "DV017"}],
+                        }
+                    ]
+                },
+                cid,
+            ),
+            final=True,
+        )
+        fields = self.emitted[-1][1]["fields"]
+        self.assertIsNone(fields["split_date"])
+        self.assertEqual(fields["iso_country"], "JP")
+        self.assertEqual(fields["sec_type"], "Common Stock")
+
+    def test_wrong_split_mnemonic_is_not_used_as_a_date(self) -> None:
+        self.feed._field_info(
+            Message(
+                {
+                    "fieldData": [
+                        {
+                            "id": "DV017",
+                            "fieldInfo": {"mnemonic": "DVD_PAY_DT"},
+                        }
+                    ]
+                },
+                FIELD_INFO_CID,
+            )
+        )
+        self.assertNotIn("DV_017", self.feed.mnemonics)
+        self.warn.assert_called()
 
     def test_unverified_percentage_field_is_not_treated_as_volume(self) -> None:
         self.feed.handle_response(

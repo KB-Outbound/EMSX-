@@ -54,7 +54,7 @@ def read_scalar(
     float_fields: set[str],
     on_warning: Callable[[str], None] | None = None,
 ) -> Any:
-    """선택 필드 오류는 호출자에게 경고하고 값만 제외한다. 메시지 원문은 기록하지 않는다."""
+    """선택 필드 오류는 경고하고 값만 제외하며 메시지 원문은 기록하지 않는다."""
     try:
         if not msg.hasElement(field):
             return None
@@ -79,6 +79,8 @@ def read_scalar(
                 return None
             if field in int_fields:
                 return numeric_field(field, value)
+            if isinstance(value, bool):
+                raise ValueError("불리언은 가격으로 사용할 수 없습니다")
             result = float(value)
             if not math.isfinite(result):
                 raise ValueError("비유한 실수")

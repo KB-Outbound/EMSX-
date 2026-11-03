@@ -19,7 +19,7 @@ from desk_journal import DeskJournal
 from kb_theme import SURFACE, MUTED, TEXT, DANGER
 from market_sessions import MarketCalendar, MarketStatus, STATE_LABELS
 from order_fields import DESK_TIMEZONE, desk_today, recent_order
-from dividend_rules import DIVIDEND_ALERT
+from dividend_rules import DIVIDEND_ALERT, SPLIT_ALERT
 
 MARKET_CODES = (
     "US",
@@ -302,6 +302,8 @@ class OperationsMixin:
                 kinds.append(row["market_warning"])
             if row.get("dividend_risk"):
                 kinds.append(DIVIDEND_ALERT)
+            if row.get("split_risk"):
+                kinds.append(SPLIT_ALERT)
             for kind in kinds:
                 key = (row["seq"], kind)
                 current[key] = {
@@ -312,9 +314,10 @@ class OperationsMixin:
                     "instruction": row["instruction"],
                     "iso_country": row["iso_country"],
                 }
-                if kind == DIVIDEND_ALERT:
+                if kind in {DIVIDEND_ALERT, SPLIT_ALERT}:
                     current[key].update(
                         dividend_ex_date=row["dividend_ex_date"],
+                        split_date=row.get("split_date", ""),
                         session_date=row["dividend_session_date"],
                         qty=row["qty"],
                         target_date=row["dividend_target_date"],

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timezone
+from decimal import Decimal
 import json
 from pathlib import Path
 import queue
@@ -66,7 +67,16 @@ class TestDailyReport(unittest.TestCase):
             req = replace(
                 req,
                 audit_size=req.audit_path.stat().st_size,
-                orders=[{"seq": 1, "dividend_ex_date": "2026-11-02"}],
+                orders=[
+                    {
+                        "seq": 1,
+                        "dividend_ex_date": "2026-11-02",
+                        "split_date": "2026-11-03",
+                    }
+                ],
+                routes=[
+                    {"seq": 1, "currency": "USD", "notional_value": Decimal("12345.67")}
+                ],
             )
             events = [
                 {
@@ -96,6 +106,16 @@ class TestDailyReport(unittest.TestCase):
             order_rows = sheet_rows(req.path, 2)
             position = order_rows[0].index("Dividend Ex Date")
             self.assertEqual(order_rows[1][position], "2026-11-02")
+            self.assertEqual(
+                order_rows[1][order_rows[0].index("Split Date")], "2026-11-03"
+            )
+            route_rows = sheet_rows(req.path, 3)
+            position = route_rows[0].index("Notional Value")
+            self.assertEqual(route_rows[1][position], "12345.67")
+            with ZipFile(req.path) as archive:
+                root = ET.fromstring(archive.read("xl/worksheets/sheet3.xml"))
+                cells = root.findall("x:sheetData/x:row", NS)[1].findall("x:c", NS)
+                self.assertEqual(cells[position].get("t"), "n")
 
     def test_audit_filter_uses_kst_day_environment_team_and_byte_cutoff(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
