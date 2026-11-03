@@ -228,15 +228,55 @@ class TestCompactLayout(TestCase):
         self.app.worker = SimpleNamespace(is_alive=lambda: True)
         self.app.messages.put({"type": "ack_armed", "armed": False})
         self.app.messages.put({"type": "ack_armed", "armed": True})
-        self.app._pump()
+        # 상태 반영 검사는 PC 속도와 분리하고 시간 기한은 별도 검사한다.
+        with patch("emsx_desk_monitor.time.monotonic", return_value=0.0):
+            self.app._pump()
         self.assertTrue(self.app.armed)
         self.assertTrue(self.app.auto_ack_enabled.get())
         self.assertEqual(self.app.arm_btn.cget("text"), "자동 Ack ON")
         self.app.messages.put({"type": "ack_armed", "armed": False})
-        self.app._pump()
+        with patch("emsx_desk_monitor.time.monotonic", return_value=0.0):
+            self.app._pump()
         self.assertFalse(self.app.armed)
         self.assertFalse(self.app.auto_ack_enabled.get())
         self.assertEqual(self.app.arm_btn.cget("text"), "자동 Ack OFF")
+
+    def test_expired_ui_budget_defers_responses_and_preserves_toggle_order(
+        self,
+    ) -> None:
+        self.app.monitoring = True
+        self.app.worker = SimpleNamespace(is_alive=lambda: True)
+        self.app.messages.put({"type": "ack_armed", "armed": False})
+        self.app.messages.put({"type": "ack_armed", "armed": True})
+        clock = [0.0]
+        poll = self.app._poll_utilities
+
+        def slow_poll() -> None:
+            poll()
+            clock[0] += 0.025
+
+        def record_event(*args: object, **kwargs: object) -> bool:
+            clock[0] += 0.021
+            return True
+
+        with patch("emsx_desk_monitor.time.monotonic", side_effect=lambda: clock[0]):
+            # 보조 작업이 20ms 기한을 쓰면 응답은 소비하지 않고 다음 주기로 넘긴다.
+            with patch.object(self.app, "_poll_utilities", side_effect=slow_poll):
+                self.app._pump()
+            self.assertEqual(self.app.messages.qsize(), 2)
+            self.assertFalse(self.app.armed)
+
+            # 응답 한 건마다 기한을 넘겨도 OFF → ON 순서와 최종 표시를 보존한다.
+            with patch.object(self.app, "_journal_event", side_effect=record_event):
+                self.app._pump()
+                self.assertEqual(self.app.messages.qsize(), 1)
+                self.assertFalse(self.app.armed)
+                self.assertFalse(self.app.auto_ack_enabled.get())
+                self.app._pump()
+            self.assertTrue(self.app.messages.empty())
+            self.assertTrue(self.app.armed)
+            self.assertTrue(self.app.auto_ack_enabled.get())
+            self.assertEqual(self.app.arm_btn.cget("text"), "자동 Ack ON")
 
     def test_broker_currency_and_notional_are_visible_and_missing_price_is_explicit(
         self,

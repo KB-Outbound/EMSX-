@@ -246,20 +246,22 @@ class TestReferenceData(unittest.TestCase):
         response["securityData"][0]["fieldData"]["EQY_SPLIT_DT"] = date(2026, 11, 4)
         cid = self.feed.pending[0]
         self.feed.handle_response(Message(response, cid), final=False)
-        self.feed.handle_response(
-            Message(
-                {
-                    "securityData": [
-                        {
-                            "security": "TEST JP Equity",
-                            "fieldExceptions": [{"fieldId": "DV017"}],
-                        }
-                    ]
-                },
-                cid,
-            ),
-            final=True,
-        )
+        with self.assertLogs("emsx", level="WARNING") as captured:
+            self.feed.handle_response(
+                Message(
+                    {
+                        "securityData": [
+                            {
+                                "security": "TEST JP Equity",
+                                "fieldExceptions": [{"fieldId": "DV017"}],
+                            }
+                        ]
+                    },
+                    cid,
+                ),
+                final=True,
+            )
+        self.assertTrue(any("DV_017" in message for message in captured.output))
         fields = self.emitted[-1][1]["fields"]
         self.assertIsNone(fields["split_date"])
         self.assertEqual(fields["iso_country"], "JP")

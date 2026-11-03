@@ -303,7 +303,8 @@ class TestDisplayIntegration(unittest.TestCase):
                 "detail": "API 응답 대기",
             }
         )
-        app._pump()
+        with patch("emsx_desk_monitor.time.monotonic", return_value=0.0):
+            app._pump()
         self.assertEqual(set(app.ack_states), set(range(1, 501)))
         self.assertEqual(len(set(app.ack_states.values())), 1)
         self.assertTrue(

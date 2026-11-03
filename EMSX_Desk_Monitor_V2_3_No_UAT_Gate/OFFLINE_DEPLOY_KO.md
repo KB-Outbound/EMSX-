@@ -302,3 +302,22 @@ python windows_build.py build
 배당 확인의 Split Date·Brokers의 Currency 및 Notional Value·Routes의 미라우팅 행을 DEMO에서 확인할 수 있습니다.
 Windows 실행 파일·실제 Bloomberg 필드 응답·전송 권한은 대상 PC 검증이 필요합니다.
 세부 규칙과 검증은 [개선 안내](DESK_ENHANCEMENTS_KO.md)를 참조하십시오.
+
+
+## 2.10.1 Windows UI 검사 실패 수정
+
+`test_toggle_matches_latest_worker_response_after_rapid_off_on` 실패는 UI 처리 함수가 한 번에
+모든 응답을 소비한다고 가정한 시간 의존 검사에서 발생했습니다.
+상태 반영과 시간 초과 후 다음 주기 처리를 분리해 검사하도록 수정했습니다.
+로그의 `참조 필드 미제공: 필드=DV_017 사유=`는 Split 모의 오류 검사에서 출력한 경고이며,
+실제 Bloomberg 조회 실패를 나타내는 빌드 로그가 아닙니다. 해당 경고도 검사 내부에서 확인합니다.
+
+전체 소스를 교체하고 기존 프로젝트 폴더에서 실행합니다. 설정·DB·wheelhouse는 보존합니다.
+추가 다운로드·설치 없이 기존 빌드 명령을 사용합니다.
+
+```bat
+python windows_build.py build
+```
+
+`빌드·독립 실행 검사 완료`와 실행 후 Event Log의 `버전 2.10.1`을 확인하십시오.
+Windows 실행 파일 빌드·독립 실행은 대상 PC 확인이 필요합니다.

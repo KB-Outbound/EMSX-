@@ -1,6 +1,6 @@
 # EMSX Desk Monitor V2 (HDGB TEAMVIEW + E2E Auto ACK)
 
-현재 버전은 **2.10.0**입니다. [최신 개선 안내](DESK_ENHANCEMENTS_KO.md): 미라우팅 Order 표시, 익영업일 Split Date 확인, Broker·Currency별 Notional Value, 기본 ON 자동 Ack 토글을 제공합니다.
+현재 버전은 **2.10.1**입니다. [최신 개선 안내](DESK_ENHANCEMENTS_KO.md): 미라우팅 Order 표시, 익영업일 Split Date 확인, Broker·Currency별 Notional Value, 기본 ON 자동 Ack 토글을 제공합니다.
 자동 Ack는 초기 수신과 기존 관리자 전송 허용 검사를 통과한 뒤 신규 적격 Order에만 적용합니다.
 화면 구성은 [거래 표 중심 화면](#280-거래-표-중심-화면)을 참조하십시오.
 시장 상태·휴장 안내·당일 Excel 보고서는
